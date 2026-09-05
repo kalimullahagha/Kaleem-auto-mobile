@@ -482,6 +482,7 @@ function recentSalesHTML(){
 let cart=[];
 let posCustomerId=null, posPayType='نقد', posBankId=null;
 let editingSaleId=null, editingSaleDiscount=0;
+let posSignature=null, posBillImage=null;
 function renderPOS(main){
   main.innerHTML = `
     ${editingSaleId?`<div class="card" style="background:#fff7e6;border:1px solid #f0c36d;"><b>✏️ بل میں ترمیم ہو رہی ہے</b> — محفوظ کرنے پر پرانا بل اپڈیٹ ہو جائے گا۔ <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="cancelEditSale()">❌ ترمیم منسوخ کریں</button></div>`:''}
@@ -503,6 +504,12 @@ function renderPOS(main){
       <div class="btn-row" style="margin-top:8px;">
         <input type="number" id="posQty" placeholder="مقدار" value="1" step="0.01" style="max-width:120px;">
         <button class="btn btn-navy" onclick="addToCart()">➕ کارٹ میں شامل کریں</button>
+      </div>
+      <div class="btn-row" style="margin-top:6px;gap:6px;">
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setPosQty(0.25)">پاؤ (¼)</button>
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setPosQty(0.5)">آدھا (½)</button>
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setPosQty(0.75)">تین پاؤ (¾)</button>
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setPosQty(1)">1 لیٹر</button>
       </div>
       <button class="btn btn-outline" style="margin-top:8px;" onclick="scanPOSItem()">📷 بارکوڈ اسکین کر کے شامل کریں</button>
     </div>
@@ -529,8 +536,61 @@ function renderPOS(main){
       <input type="number" id="posDiscount" value="${editingSaleDiscount||0}" step="0.01">
     </div>
 
+    ${posPayType==='ادھار' ? `
+    <div class="card">
+      <label>کسٹمر کے دستخط</label>
+      <canvas id="sigPad" style="width:100%;height:140px;border:1.5px dashed var(--line);border-radius:10px;touch-action:none;background:#fff;"></canvas>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="clearSignature()">🧹 دستخط صاف کریں</button>
+    </div>` : ''}
+
+    <div class="card">
+      <label>بل کی تصویر (اختیاری)</label>
+      ${posBillImage ? `<img src="${posBillImage}" style="max-width:100%;border-radius:10px;margin-bottom:8px;">
+      <button class="btn btn-outline btn-sm" onclick="posBillImage=null; renderPOS(document.getElementById('main'))">🗑️ تصویر ہٹائیں</button>`
+      : `<input type="file" accept="image/*" capture="environment" id="billPhotoInput" style="display:none;" onchange="capturePOSBillPhoto(this)">
+      <button class="btn btn-outline" onclick="document.getElementById('billPhotoInput').click()">📷 بل کی تصویر لیں</button>`}
+    </div>
+
     <button class="btn btn-primary" style="margin-top:4px;" onclick="finalizeSale()">${editingSaleId?'✅ ترمیم محفوظ کریں':'✅ سیل مکمل کریں اور بل بنائیں'}</button>
   `;
+  if(posPayType==='ادھار') initSignaturePad();
+}
+function initSignaturePad(){
+  const canvas=document.getElementById('sigPad');
+  if(!canvas) return;
+  const ratio=window.devicePixelRatio||1;
+  canvas.width=canvas.clientWidth*ratio; canvas.height=canvas.clientHeight*ratio;
+  const ctx=canvas.getContext('2d');
+  ctx.scale(ratio,ratio); ctx.lineWidth=2; ctx.lineCap='round'; ctx.strokeStyle='#1a1a2e';
+  if(posSignature){ const img=new Image(); img.onload=()=>ctx.drawImage(img,0,0,canvas.clientWidth,canvas.clientHeight); img.src=posSignature; }
+  let drawing=false, last=null;
+  function pos(e){ const r=canvas.getBoundingClientRect(); const t=e.touches?e.touches[0]:e; return {x:t.clientX-r.left, y:t.clientY-r.top}; }
+  function start(e){ drawing=true; last=pos(e); e.preventDefault(); }
+  function move(e){ if(!drawing) return; const p=pos(e); ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault(); }
+  function end(){ if(!drawing) return; drawing=false; posSignature=canvas.toDataURL('image/png'); }
+  canvas.addEventListener('mousedown',start); canvas.addEventListener('mousemove',move); canvas.addEventListener('mouseup',end); canvas.addEventListener('mouseleave',end);
+  canvas.addEventListener('touchstart',start); canvas.addEventListener('touchmove',move); canvas.addEventListener('touchend',end);
+}
+function clearSignature(){
+  posSignature=null;
+  const canvas=document.getElementById('sigPad');
+  if(canvas){ const ctx=canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); }
+}
+function capturePOSBillPhoto(input){
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      const maxW=800; const scale=Math.min(1,maxW/img.width);
+      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+      posBillImage=cv.toDataURL('image/jpeg',0.6);
+      renderPOS(document.getElementById('main'));
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 function cartHTML(){
   if(!cart.length) return `<div class="empty"><div class="ic">🛒</div>ابھی کارٹ خالی ہے</div>`;
@@ -544,6 +604,7 @@ function cartHTML(){
   const subtotal = cart.reduce((a,c)=>a+c.qty*c.price,0);
   return rows + `<div class="totalsbox"><div class="tr"><span>سب ٹوٹل</span><span>${money(subtotal)}</span></div></div>`;
 }
+function setPosQty(v){ document.getElementById('posQty').value=v; }
 async function addToCart(){
   const sel=document.getElementById('posItemPick');
   const qty=parseFloat(document.getElementById('posQty').value)||0;
@@ -588,10 +649,12 @@ async function finalizeSale(){
       sale.items = cart.map(c=>({itemId:c.itemId,name:c.name,qty:c.qty,price:c.price}));
       sale.subtotal = subtotal; sale.discount = discount; sale.netTotal = netTotal;
       sale.paymentType = posPayType; sale.bankId = posPayType==='بینک'?posBankId:null;
+      sale.signature = posPayType==='ادھار' ? (posSignature||null) : null;
+      sale.billImage = posBillImage||null;
       cart.forEach(c=>{ const it=itemById(c.itemId); if(it) it.stock=(Number(it.stock)||0)-c.qty; });
       await saveDB();
       const savedSale=sale;
-      cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; editingSaleId=null; editingSaleDiscount=0;
+      cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; editingSaleId=null; editingSaleDiscount=0; posSignature=null; posBillImage=null;
       toast('✅ بل میں ترمیم محفوظ ہو گئی — '+savedSale.invoiceNo);
       showInvoice(savedSale);
     }
@@ -604,12 +667,14 @@ async function finalizeSale(){
     customerId: posCustomerId||null,
     items: cart.map(c=>({itemId:c.itemId,name:c.name,qty:c.qty,price:c.price})),
     subtotal, discount, netTotal,
-    paymentType: posPayType, bankId: posPayType==='بینک'?posBankId:null
+    paymentType: posPayType, bankId: posPayType==='بینک'?posBankId:null,
+    signature: posPayType==='ادھار' ? (posSignature||null) : null,
+    billImage: posBillImage||null
   };
   DB.sales.push(sale);
   cart.forEach(c=>{ const it=itemById(c.itemId); if(it) it.stock=(Number(it.stock)||0)-c.qty; });
   await saveDB();
-  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null;
+  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; posSignature=null; posBillImage=null;
   toast('✅ سیل محفوظ ہو گئی — '+invoiceNo);
   showInvoice(sale);
   } finally { unlockSubmit(); }
@@ -625,6 +690,8 @@ function editSale(saleId){
   posBankId = sale.bankId||null;
   editingSaleId = sale.id;
   editingSaleDiscount = sale.discount||0;
+  posSignature = sale.signature||null;
+  posBillImage = sale.billImage||null;
   go('pos');
 }
 function cancelEditSale(){
@@ -632,7 +699,7 @@ function cancelEditSale(){
     const sale=DB.sales.find(s=>s.id===editingSaleId);
     if(sale){ sale.items.forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(it.qty||0); }); }
   }
-  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; editingSaleId=null; editingSaleDiscount=0;
+  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; editingSaleId=null; editingSaleDiscount=0; posSignature=null; posBillImage=null;
   go('dash');
 }
 
@@ -656,6 +723,8 @@ function showInvoice(sale){
         <div class="tr grand"><span>کل ادائیگی</span><span>${money(sale.netTotal)}</span></div>
         <div class="tr"><span>ادائیگی کی قسم</span><span>${sale.paymentType}</span></div>
       </div>
+      ${sale.billImage ? `<div style="margin-top:10px;"><div style="font-size:12px;color:var(--muted);margin-bottom:4px;">بل کی تصویر</div><img src="${sale.billImage}" style="max-width:100%;border-radius:8px;"></div>` : ''}
+      ${sale.signature ? `<div style="margin-top:10px;"><div style="font-size:12px;color:var(--muted);margin-bottom:4px;">کسٹمر کے دستخط</div><img src="${sale.signature}" style="max-width:100%;border:1px solid var(--line);border-radius:8px;background:#fff;"></div>` : ''}
     </div>`;
   openSheet('بل / انوائس', body + `
     <div class="btn-row" style="margin-top:14px;">
@@ -825,6 +894,7 @@ function openCustomerDetail(id){
     <h3 style="margin-top:16px;color:var(--navy);font-size:14px;">مکمل حساب</h3>
     ${rows}
     <button class="btn btn-outline" style="margin-top:10px;" onclick="openCustomerEdit('${c.id}')">✏️ تفصیل تبدیل کریں</button>
+    <button class="btn btn-red" style="margin-top:8px;" onclick="deleteCustomer('${c.id}')">🗑️ یہ کسٹمر حذف کریں</button>
   `;
   openSheet(c.name, body);
 }
@@ -1106,10 +1176,25 @@ function openBankDetail(bankId){
     <div><div class="name">${esc(b.name)}</div><div class="meta">${esc(b.accountNo||'')}</div></div></div>
     <div class="stat good" style="margin-top:10px;"><div class="label">موجودہ بیلنس</div><div class="value">${money(bankBalance(bankId))}</div></div>
     <button class="btn btn-outline" style="margin-top:10px;" onclick="openBankEntryForm('${bankId}')">+ نئی انٹری (جمع/نکلوائی)</button>
+    <button class="btn btn-red" style="margin-top:8px;" onclick="deleteBank('${bankId}')">🗑️ یہ بینک اکاؤنٹ حذف کریں</button>
     <h3 style="margin-top:14px;color:var(--navy);font-size:14px;">تمام انٹریاں</h3>
     ${rows||'<div class="empty">کوئی انٹری نہیں</div>'}
   `;
   openSheet(b.name, body);
+}
+async function deleteBank(bankId){
+  const hasEntries = DB.bankEntries.some(e=>e.bankId===bankId) || DB.sales.some(s=>s.bankId===bankId) || DB.purchases.some(p=>p.bankId===bankId);
+  const msg = hasEntries
+    ? 'اس بینک اکاؤنٹ کی تمام انٹریاں اور اس سے جڑے بل بھی حذف ہو جائیں گے۔ یقینی بنائیں؟'
+    : 'یہ بینک اکاؤنٹ حذف کرنا چاہتے ہیں؟';
+  if(!(await customConfirm(msg))) return;
+  DB.sales.filter(s=>s.bankId===bankId).forEach(s=>{ (s.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); });
+  DB.purchases.filter(p=>p.bankId===bankId).forEach(p=>{ const item=itemById(p.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(p.qty||0); });
+  DB.sales=DB.sales.filter(s=>s.bankId!==bankId);
+  DB.purchases=DB.purchases.filter(p=>p.bankId!==bankId);
+  DB.bankEntries=DB.bankEntries.filter(e=>e.bankId!==bankId);
+  DB.banks=DB.banks.filter(b=>b.id!==bankId);
+  await saveDB(); closeSheet(); renderBanks(document.getElementById('main')); toast('بینک اکاؤنٹ حذف ہو گیا');
 }
 async function deleteBankLedgerEntry(kind,id,bankId){
   if(!(await customConfirm('یہ انٹری حذف کرنا چاہتے ہیں؟'))) return;
