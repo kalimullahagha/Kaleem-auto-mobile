@@ -1,0 +1,16 @@
+{
+  "name": "کلیم آٹو موبائل",
+  "short_name": "کلیم آٹو",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#fbf7f0",
+  "theme_color": "#122a43",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='16' fill='%23122a43'/%3E%3Ctext x='50' y='62' font-size='42' text-anchor='middle' fill='%23e08a2c' font-family='Arial'%3EK%3C/text%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
