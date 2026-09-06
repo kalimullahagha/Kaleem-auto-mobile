@@ -308,13 +308,13 @@ async function loadDB(){
   let loaded=null;
   if(hasFirebase){
     try{
-      const snap = await FB_DOC().get();
+      const snap = await withTimeout(FB_DOC().get(), 6000);
       if(snap.exists && snap.data().db){ loaded=JSON.parse(snap.data().db); cloudWorks=true; }
-    }catch(e){ console.error('Firestore load failed', e); }
+    }catch(e){ console.error('Firestore load failed/timed out', e); }
   }
   if(!loaded && hasCloudStorage){
     try{
-      const res = await window.storage.get(STORAGE_KEY, false);
+      const res = await withTimeout(window.storage.get(STORAGE_KEY, false), 6000);
       if(res && res.value){ loaded=JSON.parse(res.value); cloudWorks=true; }
     }catch(e){}
   }
@@ -330,24 +330,34 @@ async function loadDB(){
 let formSubmitting=false;
 function lockSubmit(){ if(formSubmitting) return false; formSubmitting=true; return true; }
 function unlockSubmit(){ formSubmitting=false; }
-let saving=false, pendingSave=false;
-async function saveDB(){
-  if(saving){ pendingSave=true; return; }
-  saving=true;
+let cloudSyncQueued=false, cloudSyncTimer=null;
+// Plain, synchronous function — NOT async, NO internal await. Guarantees the
+// local save (and anything after it in the caller) never waits on the network
+// or on a browser-throttled promise/microtask, even in odd connectivity states.
+function saveDB(){
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
+  const dbJson = JSON.stringify(DB);
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(function(){ syncToCloudBackground(dbJson); }, 0);
+}
+function withTimeout(promise, ms){
+  return Promise.race([
+    promise,
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')), ms))
+  ]);
+}
+async function syncToCloudBackground(dbJson){
   if(hasFirebase){
     try{
       lastLocalWriteStamp = Date.now();
-      await FB_DOC().set({ db: JSON.stringify(DB), updatedBy: deviceId, updatedAt: lastLocalWriteStamp });
+      await withTimeout(FB_DOC().set({ db: dbJson, updatedBy: deviceId, updatedAt: lastLocalWriteStamp }), 8000);
       cloudWorks=true;
-    }catch(e){ console.error('Firestore save failed', e); }
+    }catch(e){ console.error('Firestore save failed/timed out', e); }
   }
   if(hasCloudStorage){
-    try{ await window.storage.set(STORAGE_KEY, JSON.stringify(DB), false); cloudWorks=true; }
+    try{ await withTimeout(window.storage.set(STORAGE_KEY, dbJson, false), 8000); cloudWorks=true; }
     catch(e){}
   }
-  saving=false;
-  if(pendingSave){ pendingSave=false; saveDB(); }
 }
 
 function downloadBackup(){
