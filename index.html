@@ -557,7 +557,7 @@ function renderPOS(main){
       <label>بل کی تصویر (اختیاری)</label>
       ${posBillImage ? `<img src="${posBillImage}" style="max-width:100%;border-radius:10px;margin-bottom:8px;">
       <button class="btn btn-outline btn-sm" onclick="posBillImage=null; renderPOS(document.getElementById('main'))">🗑️ تصویر ہٹائیں</button>`
-      : `<input type="file" accept="image/*" capture="environment" id="billPhotoInput" style="display:none;" onchange="capturePOSBillPhoto(this)">
+      : `<input type="file" accept="image/*" id="billPhotoInput" style="display:none;" onchange="capturePOSBillPhoto(this)">
       <button class="btn btn-outline" onclick="document.getElementById('billPhotoInput').click()">📷 بل کی تصویر لیں</button>`}
     </div>
 
@@ -854,7 +854,7 @@ function itemPhotoWrapHtml(){
   return itemFormPhoto
     ? `<img src="${itemFormPhoto}" style="max-width:140px;border-radius:10px;display:block;margin-bottom:8px;">
        <button type="button" class="btn btn-outline btn-sm" onclick="itemFormPhoto=null; document.getElementById('f_photo_wrap').innerHTML=itemPhotoWrapHtml();">🗑️ تصویر ہٹائیں</button>`
-    : `<input type="file" accept="image/*" capture="environment" id="itemPhotoInput" style="display:none;" onchange="captureItemPhoto(this)">
+    : `<input type="file" accept="image/*" id="itemPhotoInput" style="display:none;" onchange="captureItemPhoto(this)">
        <button type="button" class="btn btn-outline" onclick="document.getElementById('itemPhotoInput').click()">📷 تصویر لیں</button>`;
 }
 function captureItemPhoto(input){
@@ -921,6 +921,7 @@ function renderCustomers(main){
 }
 function openCustomerForm(fromPOS){
   const body=`
+    <button type="button" class="btn btn-outline" style="margin-bottom:10px;" onclick="pickPhoneContact()">📇 فون کانٹیکٹس سے منتخب کریں</button>
     <label>کسٹمر کا نام</label><input type="text" id="c_name">
     <label>واٹس ایپ نمبر</label><input type="tel" id="c_phone" placeholder="923xxxxxxxxx">
     <label>پتہ</label><input type="text" id="c_addr">
@@ -928,6 +929,21 @@ function openCustomerForm(fromPOS){
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCustomer(${fromPOS?true:false})">محفوظ کریں</button>
   `;
   openSheet('نیا کسٹمر', body);
+}
+async function pickPhoneContact(){
+  if(!('contacts' in navigator) || !('ContactsManager' in window)){
+    toast('یہ فیچر صرف Chrome (Android) میں دستیاب ہے');
+    return;
+  }
+  try{
+    const contacts = await navigator.contacts.select(['name','tel'], {multiple:false});
+    if(contacts && contacts.length){
+      const c=contacts[0];
+      const nameInp=document.getElementById('c_name'); const phoneInp=document.getElementById('c_phone');
+      if(nameInp && c.name && c.name.length) nameInp.value=c.name[0];
+      if(phoneInp && c.tel && c.tel.length) phoneInp.value=c.tel[0].replace(/[^0-9+]/g,'');
+    }
+  }catch(e){ /* user cancelled or permission denied */ }
 }
 async function saveCustomer(fromPOS){
   if(!lockSubmit()) return;
