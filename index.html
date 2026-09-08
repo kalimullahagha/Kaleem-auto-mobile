@@ -249,6 +249,7 @@ function defaultDB(){
     shop:{ name:'کلیم آٹو موبائل', address:'پلاٹ نمبر بی 49، شیر جناح کالونی، اسٹاپ نمبر 20', phone:'', pin:'' },
     items:[], customers:[], banks:[], sales:[], purchases:[],
     cashEntries:[], bankEntries:[], collections:[], trash:[],
+    amanatPersons:[], amanatEntries:[],
     invoiceCounter: 0
   };
 }
@@ -295,6 +296,7 @@ function startFBListener(){
       remote.sales=remote.sales||[]; remote.purchases=remote.purchases||[]; remote.cashEntries=remote.cashEntries||[];
       remote.bankEntries=remote.bankEntries||[]; remote.collections=remote.collections||[]; remote.invoiceCounter=remote.invoiceCounter||0;
       remote.trash=remote.trash||[];
+      remote.amanatPersons=remote.amanatPersons||[]; remote.amanatEntries=remote.amanatEntries||[];
       remote.shop=remote.shop||defaultDB().shop;
       DB=remote;
       try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
@@ -327,6 +329,7 @@ async function loadDB(){
   DB.sales=DB.sales||[]; DB.purchases=DB.purchases||[]; DB.cashEntries=DB.cashEntries||[];
   DB.bankEntries=DB.bankEntries||[]; DB.collections=DB.collections||[]; DB.invoiceCounter=DB.invoiceCounter||0;
   DB.trash=DB.trash||[];
+  DB.amanatPersons=DB.amanatPersons||[]; DB.amanatEntries=DB.amanatEntries||[];
   if(hasFirebase) startFBListener();
 }
 let formSubmitting=false;
@@ -1094,6 +1097,7 @@ async function confirmDeleteCollection(colId,custId){
 
 /* ===================== MORE (Purchases / Cash / Banks) ===================== */
 let moreView='menu';
+let amanatSearch='';
 function renderMore(main){
   if(moreView==='menu'){
     main.innerHTML=`
@@ -1101,6 +1105,7 @@ function renderMore(main){
         <div class="list-item" onclick="moreView='purchases';render()"><div class="name">📥 خریداری (سپلائر سے مال)</div><span>›</span></div>
         <div class="list-item" onclick="moreView='cash';render()"><div class="name">💵 کیش بک</div><span>›</span></div>
         <div class="list-item" onclick="moreView='banks';render()"><div class="name">🏦 بینک اکاؤنٹس</div><span>›</span></div>
+        <div class="list-item" onclick="moreView='amanat';render()"><div class="name">🔒 امانت (رقم)</div><span>›</span></div>
         <div class="list-item" onclick="moreView='trash';render()"><div class="name">🗑️ ری سائیکل بن${DB.trash&&DB.trash.length?` (${DB.trash.length})`:''}</div><span>›</span></div>
         <div class="list-item" onclick="moreView='settings';render()"><div class="name">⚙️ دکان کی سیٹنگز</div><span>›</span></div>
       </div>
@@ -1111,9 +1116,138 @@ function renderMore(main){
   if(moreView==='cash') return renderCash(main);
   if(moreView==='banks') return renderBanks(main);
   if(moreView==='trash') return renderTrash(main);
+  if(moreView==='amanat') return renderAmanat(main);
   if(moreView==='settings') return renderSettings(main);
 }
 function backToMoreMenu(){ moreView='menu'; render(); }
+
+/* ===================== AMANAT (Trust Deposits) ===================== */
+function amanatBalance(personId){
+  return DB.amanatEntries.filter(e=>e.personId===personId).reduce((s,e)=> s + (e.type==='in'?Number(e.amount):-Number(e.amount)), 0);
+}
+function renderAmanat(main){
+  const q=(amanatSearch||'').trim().toLowerCase();
+  const list = DB.amanatPersons.filter(p=> !q || p.name.toLowerCase().includes(q) || (p.phone||'').includes(q));
+  const totalHeld = DB.amanatPersons.reduce((s,p)=>s+amanatBalance(p.id),0);
+  main.innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="backToMoreMenu()">‹ واپس</button>
+    <div class="stat warn" style="margin-top:10px;"><div class="label">کل امانت (جو واپس کرنی ہے)</div><div class="value">${money(totalHeld)}</div></div>
+    <div class="card">
+      <input type="text" placeholder="نام تلاش کریں..." value="${esc(amanatSearch||'')}" oninput="amanatSearch=this.value; renderAmanat(document.getElementById('main'))">
+      <button class="btn btn-primary" style="margin-top:8px;" onclick="openAmanatPersonForm()">+ نیا شخص شامل کریں</button>
+    </div>
+    <div class="card">
+      ${list.length? list.map(p=>{
+        const bal=amanatBalance(p.id);
+        return `<div class="list-item" onclick="openAmanatDetail('${p.id}')">
+          <div><div class="name">${esc(p.name)}</div><div class="meta">${esc(p.phone||'')}</div></div>
+          <div style="font-weight:800;">${money(bal)}</div>
+        </div>`;
+      }).join('') : `<div class="empty">کوئی شخص شامل نہیں</div>`}
+    </div>
+  `;
+}
+function openAmanatPersonForm(id){
+  const p = id ? DB.amanatPersons.find(x=>x.id===id) : {name:'',phone:''};
+  const body=`
+    <label>نام</label><input type="text" id="am_name" value="${esc(p.name)}">
+    <label>فون نمبر (اختیاری)</label><input type="tel" id="am_phone" value="${esc(p.phone||'')}">
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveAmanatPerson('${id||''}')">محفوظ کریں</button>
+  `;
+  openSheet(id?'تفصیل تبدیل کریں':'نیا شخص', body);
+}
+async function saveAmanatPerson(id){
+  if(!lockSubmit()) return;
+  try{
+  const name=document.getElementById('am_name').value.trim();
+  if(!name){ toast('نام لکھیں'); return; }
+  const phone=document.getElementById('am_phone').value.trim();
+  if(id){ const p=DB.amanatPersons.find(x=>x.id===id); if(p){ p.name=name; p.phone=phone; } }
+  else{ DB.amanatPersons.push({id:uid(), name, phone, createdAt:Date.now()}); }
+  await saveDB(); closeSheet(); renderAmanat(document.getElementById('main'));
+  } finally { unlockSubmit(); }
+}
+async function deleteAmanatPerson(id){
+  if(!(await customConfirm('اس شخص کو اور اس کی تمام امانت انٹریاں حذف کرنا چاہتے ہیں؟'))) return;
+  const p=DB.amanatPersons.find(x=>x.id===id);
+  const relEntries=DB.amanatEntries.filter(e=>e.personId===id);
+  if(p) trashPut('amanatPerson', 'امانت: '+p.name, { person:p, entries:relEntries });
+  DB.amanatEntries=DB.amanatEntries.filter(e=>e.personId!==id);
+  DB.amanatPersons=DB.amanatPersons.filter(x=>x.id!==id);
+  await saveDB(); closeSheet(); renderAmanat(document.getElementById('main')); toast('حذف ہو گیا (ری سائیکل بن میں محفوظ)');
+}
+function openAmanatDetail(id){
+  const p=DB.amanatPersons.find(x=>x.id===id);
+  const bal=amanatBalance(id);
+  const entries=[...DB.amanatEntries.filter(e=>e.personId===id)].sort((a,b)=>a.createdAt-b.createdAt);
+  let running=0;
+  const rows = entries.map(e=>{ running += e.type==='in'?Number(e.amount):-Number(e.amount);
+    return `<div class="list-item">
+      <div style="flex:1;cursor:pointer;" onclick="openAmanatEntryForm('${id}','${e.id}')">
+        <div class="name">${esc(e.notes||(e.type==='in'?'امانت رکھی':'واپس کی'))}</div>
+        <div class="meta">${fmtDateTime(e.date,e.createdAt)} • بیلنس: ${money(running)}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="font-weight:800;color:${e.type==='in'?'var(--red)':'var(--green)'}">${e.type==='in'?'+':'-'}${money(e.amount)}</div>
+        <button class="btn btn-red btn-sm" style="padding:6px 10px;" onclick="deleteAmanatEntry('${id}','${e.id}')">🗑️</button>
+      </div></div>`;
+  }).reverse().join('');
+  const body=`
+    <div class="stat warn"><div class="label">کل امانت (واپس کرنی ہے)</div><div class="value">${money(bal)}</div></div>
+    <div class="meta" style="margin-top:6px;">${esc(p.phone||'')}</div>
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="btn btn-outline" onclick="openAmanatEntryForm('${id}',null,'in')">➕ امانت رکھی</button>
+      <button class="btn btn-outline" onclick="openAmanatEntryForm('${id}',null,'out')">➖ واپس کی</button>
+    </div>
+    <h3 style="margin-top:16px;color:var(--navy);font-size:14px;">تمام انٹریاں</h3>
+    ${rows||'<div class="empty">کوئی انٹری نہیں</div>'}
+    <button class="btn btn-outline" style="margin-top:12px;" onclick="openAmanatPersonForm('${id}')">✏️ تفصیل تبدیل کریں</button>
+    <button class="btn btn-red" style="margin-top:8px;" onclick="deleteAmanatPerson('${id}')">🗑️ یہ شخص حذف کریں</button>
+  `;
+  openSheet(p.name, body);
+}
+function openAmanatEntryForm(personId,entryId,defaultType){
+  const e = entryId ? DB.amanatEntries.find(x=>x.id===entryId) : null;
+  const type = e ? e.type : (defaultType||'in');
+  const body=`
+    <div class="seg"><button class="${type==='in'?'on':''}" id="am_in_btn" onclick="setAmanatType('in')">امانت رکھی (لی)</button><button class="${type==='out'?'on':''}" id="am_out_btn" onclick="setAmanatType('out')">واپس کی (دی)</button></div>
+    <input type="hidden" id="am_type" value="${type}">
+    <label>رقم</label><input type="number" id="am_amt" value="${e?e.amount:''}">
+    <label>تاریخ</label><input type="date" id="am_date" value="${e?e.date:todayStr()}">
+    <label>نوٹس (اختیاری)</label><input type="text" id="am_notes" value="${e?esc(e.notes||''):''}">
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveAmanatEntry('${personId}','${entryId||''}')">محفوظ کریں</button>
+  `;
+  openSheet(entryId?'انٹری میں ترمیم':'نئی امانت انٹری', body);
+}
+function setAmanatType(t){
+  document.getElementById('am_type').value=t;
+  document.getElementById('am_in_btn').classList.toggle('on',t==='in');
+  document.getElementById('am_out_btn').classList.toggle('on',t==='out');
+}
+async function saveAmanatEntry(personId,entryId){
+  if(!lockSubmit()) return;
+  try{
+  const amount=parseFloat(document.getElementById('am_amt').value)||0;
+  if(amount<=0){ toast('صحیح رقم لکھیں'); return; }
+  const type=document.getElementById('am_type').value;
+  const date=document.getElementById('am_date').value||todayStr();
+  const notes=document.getElementById('am_notes').value.trim();
+  if(entryId){
+    const e=DB.amanatEntries.find(x=>x.id===entryId);
+    if(e){ e.amount=amount; e.type=type; e.date=date; e.notes=notes; }
+  } else {
+    DB.amanatEntries.push({id:uid(), createdAt:Date.now(), personId, amount, type, date, notes});
+  }
+  await saveDB(); closeSheet(); openAmanatDetail(personId); toast('محفوظ ہو گیا');
+  } finally { unlockSubmit(); }
+}
+async function deleteAmanatEntry(personId,entryId){
+  if(!(await customConfirm('یہ انٹری حذف کرنا چاہتے ہیں؟'))) return;
+  const e=DB.amanatEntries.find(x=>x.id===entryId);
+  if(e) trashPut('amanatEntry', 'امانت انٹری: '+money(e.amount), e);
+  DB.amanatEntries=DB.amanatEntries.filter(x=>x.id!==entryId);
+  await saveDB(); openAmanatDetail(personId); toast('حذف ہو گئی (ری سائیکل بن میں محفوظ)');
+}
 
 /* ===================== RECYCLE BIN ===================== */
 function trashPut(type, label, data){
@@ -1176,6 +1310,11 @@ async function restoreFromTrash(trashId){
   } else if(t.type==='purchase'){
     DB.purchases.push(d);
     const item=itemById(d.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(d.qty||0);
+  } else if(t.type==='amanatPerson'){
+    DB.amanatPersons.push(d.person);
+    (d.entries||[]).forEach(e=>DB.amanatEntries.push(e));
+  } else if(t.type==='amanatEntry'){
+    DB.amanatEntries.push(d);
   }
   DB.trash = (DB.trash||[]).filter(x=>x.id!==trashId);
   await saveDB(); renderTrash(document.getElementById('main')); toast('بحال ہو گیا');
