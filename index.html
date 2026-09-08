@@ -389,6 +389,8 @@ async function restoreFromFile(evt){
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
 function fmtDate(s){ if(!s) return ''; const d=new Date(s); return d.toLocaleDateString('ur-PK',{year:'numeric',month:'2-digit',day:'2-digit'}); }
+function fmtTime(ts){ if(!ts) return ''; const d=new Date(ts); return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}); }
+function fmtDateTime(dateStr,ts){ return fmtDate(dateStr) + (ts?' • '+fmtTime(ts):''); }
 function money(n){ n=Number(n)||0; return n.toLocaleString('en-US',{maximumFractionDigits:2}); }
 function toast(msg){
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
@@ -751,7 +753,7 @@ function showInvoice(sale){
         <div class="addr">${esc(DB.shop.address)}</div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-top:8px;">
-        <span>بل نمبر: <b>${sale.invoiceNo}</b></span><span>${fmtDate(sale.date)}</span>
+        <span>بل نمبر: <b>${sale.invoiceNo}</b></span><span>${fmtDateTime(sale.date,sale.createdAt)}</span>
       </div>
       <div style="font-size:12.5px;margin-top:2px;">کسٹمر: <b>${c?esc(c.name):'واک اِن گاہک'}</b></div>
       <table><thead><tr><th>آئٹم</th><th>مقدار</th><th>قیمت</th><th>ٹوٹل</th></tr></thead><tbody>${rows}</tbody></table>
@@ -972,7 +974,7 @@ function openCustomerDetail(id){
   const due=custDue(c);
   const txns=[];
   DB.sales.filter(s=>s.customerId===id).forEach(s=>txns.push({date:s.date,ts:s.createdAt||0,desc:s.invoiceNo+' — '+s.paymentType,amt:s.netTotal,type:'sale',id:s.id}));
-  DB.collections.filter(x=>x.customerId===id).forEach(x=>txns.push({date:x.date,ts:0,desc:'وصولی'+(x.notes?' — '+x.notes:''),amt:-x.amount,type:'col',id:x.id}));
+  DB.collections.filter(x=>x.customerId===id).forEach(x=>txns.push({date:x.date,ts:x.createdAt||0,desc:'وصولی'+(x.notes?' — '+x.notes:''),amt:-x.amount,type:'col',id:x.id}));
   // Compute running balance chronologically (oldest first), then show newest first.
   const asc = txns.slice().sort((a,b)=> a.date>b.date?1 : a.date<b.date?-1 : (a.ts-b.ts));
   let running = c.openingDue||0;
@@ -980,14 +982,16 @@ function openCustomerDetail(id){
   const totalGiven = txns.filter(t=>t.type==='sale').reduce((s,t)=>s+t.amt,0);
   const totalReceived = txns.filter(t=>t.type==='col').reduce((s,t)=>s+Math.abs(t.amt),0);
   const desc = asc.slice().reverse();
-  const rows = desc.length? desc.map(t=>`<div class="list-item" onclick="${t.type==='sale'?`openSaleFromCustomer('${t.id}')`:`confirmDeleteCollection('${t.id}','${id}')`}">
-      <div><div class="name">${esc(t.desc)}</div><div class="meta">${fmtDate(t.date)} • بیلنس: ${money(t.balance)}</div></div>
+  const rows = desc.length? desc.map(t=>`<div class="list-item">
+      <div style="flex:1;cursor:pointer;" onclick="${t.type==='sale'?`openSaleFromCustomer('${t.id}')`:`editCollectionFromLedger('${t.id}','${id}')`}">
+        <div class="name">${esc(t.desc)}</div><div class="meta">${fmtDateTime(t.date,t.ts)} • بیلنس: ${money(t.balance)}</div>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="text-align:${document.dir==='rtl'?'left':'right'};">
           <div style="font-size:11px;color:var(--muted);">${t.amt<0?'آپ کو ملے':'آپ نے دیے'}</div>
           <div style="font-weight:800;color:${t.amt<0?'var(--green)':'var(--red)'}">${money(Math.abs(t.amt))}</div>
         </div>
-        <span style="color:var(--red);font-size:15px;">🗑️</span>
+        ${t.type==='col'?`<button class="btn btn-red btn-sm" style="padding:6px 10px;" onclick="confirmDeleteCollection('${t.id}','${id}')">🗑️</button>`:''}
       </div></div>`).join('')
     : `<div class="empty">کوئی ٹرانزیکشن نہیں</div>`;
   const body=`
@@ -1016,21 +1020,29 @@ function waReminder(id){
   const text=`السلام علیکم ${c.name}، آپ کے ذمے ${DB.shop.name} کی ${money(due)} روپے رقم باقی ہے۔ براہ کرم جلد ادائیگی کریں۔ شکریہ`;
   window.open(waLink(c.phone,text),'_blank');
 }
-function openCollectionForm(custId){
+function openCollectionForm(custId,colId){
+  const c = colId ? DB.collections.find(x=>x.id===colId) : null;
   const body=`
-    <label>رقم</label><input type="number" id="col_amt">
-    <label>تاریخ</label><input type="date" id="col_date" value="${todayStr()}">
-    <label>نوٹس</label><input type="text" id="col_notes">
-    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCollection('${custId}')">محفوظ کریں</button>
+    <label>رقم</label><input type="number" id="col_amt" value="${c?c.amount:''}">
+    <label>تاریخ</label><input type="date" id="col_date" value="${c?c.date:todayStr()}">
+    <label>نوٹس</label><input type="text" id="col_notes" value="${c?esc(c.notes||''):''}">
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCollection('${custId}','${colId||''}')">محفوظ کریں</button>
   `;
-  openSheet('وصولی درج کریں', body);
+  openSheet(colId?'وصولی میں ترمیم':'وصولی درج کریں', body);
 }
-async function saveCollection(custId){
+async function saveCollection(custId,colId){
   if(!lockSubmit()) return;
   try{
   const amount=parseFloat(document.getElementById('col_amt').value)||0;
   if(amount<=0){ toast('صحیح رقم لکھیں'); return; }
-  DB.collections.push({id:uid(), customerId:custId, amount, date:document.getElementById('col_date').value||todayStr(), notes:document.getElementById('col_notes').value.trim()});
+  const date=document.getElementById('col_date').value||todayStr();
+  const notes=document.getElementById('col_notes').value.trim();
+  if(colId){
+    const c=DB.collections.find(x=>x.id===colId);
+    if(c){ c.amount=amount; c.date=date; c.notes=notes; }
+  } else {
+    DB.collections.push({id:uid(), createdAt:Date.now(), customerId:custId, amount, date, notes});
+  }
   await saveDB(); closeSheet(); openCustomerDetail(custId); toast('وصولی محفوظ ہو گئی');
   } finally { unlockSubmit(); }
 }
@@ -1071,6 +1083,7 @@ function openSaleFromCustomer(saleId){
   if(!sale){ toast('یہ بل نہیں ملا'); return; }
   showInvoice(sale);
 }
+function editCollectionFromLedger(colId,custId){ openCollectionForm(custId,colId); }
 async function confirmDeleteCollection(colId,custId){
   if(!(await customConfirm('یہ وصولی کی انٹری حذف کرنا چاہتے ہیں؟'))) return;
   const col=DB.collections.find(x=>x.id===colId);
@@ -1158,6 +1171,11 @@ async function restoreFromTrash(trashId){
     (d.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(it.qty||0); });
   } else if(t.type==='collection'){
     DB.collections.push(d);
+  } else if(t.type==='cash'){
+    DB.cashEntries.push(d);
+  } else if(t.type==='purchase'){
+    DB.purchases.push(d);
+    const item=itemById(d.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(d.qty||0);
   }
   DB.trash = (DB.trash||[]).filter(x=>x.id!==trashId);
   await saveDB(); renderTrash(document.getElementById('main')); toast('بحال ہو گیا');
@@ -1172,35 +1190,41 @@ function renderPurchases(main){
       <button class="btn btn-primary" onclick="openPurchaseForm()">+ نئی خریداری درج کریں</button>
     </div>
     <div class="card">
-      ${list.length? list.map(p=>`<div class="list-item"><div><div class="name">${esc(p.supplier||'سپلائر')}</div>
-        <div class="meta">${fmtDate(p.date)} • ${p.paymentType}</div></div><div style="font-weight:800;">${money(p.total)}</div></div>`).join('')
+      ${list.length? list.map(p=>`<div class="list-item"><div><div class="name">${esc(p.supplier||'سپلائر')} — ${esc(p.itemName||'')}</div>
+        <div class="meta">${fmtDateTime(p.date,p.createdAt)} • ${p.paymentType}</div></div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="font-weight:800;">${money(p.total)}</div>
+          <button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="openPurchaseForm('${p.id}')">✏️</button>
+          <button class="btn btn-red btn-sm" style="padding:6px 10px;" onclick="deletePurchase('${p.id}')">🗑️</button>
+        </div></div>`).join('')
         : `<div class="empty">ابھی کوئی خریداری نہیں</div>`}
     </div>
   `;
 }
-function openPurchaseForm(){
+function openPurchaseForm(id){
+  const p = id ? DB.purchases.find(x=>x.id===id) : null;
   const body=`
-    <label>سپلائر کا نام</label><input type="text" id="p_supplier">
+    <label>سپلائر کا نام</label><input type="text" id="p_supplier" value="${p?esc(p.supplier||''):''}">
     <label>آئٹم</label>
-    <select id="p_item">${DB.items.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join('')}</select>
+    <select id="p_item">${DB.items.map(i=>`<option value="${i.id}" ${p&&p.itemId===i.id?'selected':''}>${esc(i.name)}</option>`).join('')}</select>
     <div class="grid2">
-      <div><label>مقدار</label><input type="number" step="0.01" id="p_qty" value="1"></div>
-      <div><label>فی یونٹ خریداری قیمت</label><input type="number" id="p_cost"></div>
+      <div><label>مقدار</label><input type="number" step="0.01" id="p_qty" value="${p?p.qty:1}"></div>
+      <div><label>فی یونٹ خریداری قیمت</label><input type="number" id="p_cost" value="${p?p.cost:''}"></div>
     </div>
     <label>ادائیگی کی قسم</label>
     <select id="p_pay" onchange="document.getElementById('p_bankwrap').style.display=this.value==='بینک'?'block':'none'">
-      <option value="نقد">نقد</option><option value="بینک">بینک</option>
+      <option value="نقد" ${p&&p.paymentType==='نقد'?'selected':''}>نقد</option><option value="بینک" ${p&&p.paymentType==='بینک'?'selected':''}>بینک</option>
     </select>
-    <div id="p_bankwrap" style="display:none;">
+    <div id="p_bankwrap" style="display:${p&&p.paymentType==='بینک'?'block':'none'};">
       <label>بینک</label>
-      <select id="p_bank">${DB.banks.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select>
+      <select id="p_bank">${DB.banks.map(b=>`<option value="${b.id}" ${p&&p.bankId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>
     </div>
-    <label>تاریخ</label><input type="date" id="p_date" value="${todayStr()}">
-    <button class="btn btn-primary" style="margin-top:14px;" onclick="savePurchase()">محفوظ کریں</button>
+    <label>تاریخ</label><input type="date" id="p_date" value="${p?p.date:todayStr()}">
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="savePurchase('${id||''}')">محفوظ کریں</button>
   `;
-  openSheet('نئی خریداری', body);
+  openSheet(id?'خریداری میں ترمیم':'نئی خریداری', body);
 }
-async function savePurchase(){
+async function savePurchase(id){
   if(!lockSubmit()) return;
   try{
   const itemId=document.getElementById('p_item').value;
@@ -1209,13 +1233,36 @@ async function savePurchase(){
   if(!itemId||qty<=0){ toast('آئٹم اور مقدار درست لکھیں'); return; }
   const it=itemById(itemId);
   const pay=document.getElementById('p_pay').value;
-  const purchase={id:uid(), createdAt:Date.now(), date:document.getElementById('p_date').value||todayStr(),
-    supplier:document.getElementById('p_supplier').value.trim(), itemId, itemName:it.name, qty, cost,
-    total:qty*cost, paymentType:pay, bankId: pay==='بینک'?document.getElementById('p_bank').value:null};
-  DB.purchases.push(purchase);
-  it.stock=(Number(it.stock)||0)+qty;
-  await saveDB(); closeSheet(); renderPurchases(document.getElementById('main')); toast('خریداری محفوظ ہو گئی — اسٹاک بڑھ گیا');
+  if(id){
+    const old=DB.purchases.find(x=>x.id===id);
+    if(old){
+      const oldItem=itemById(old.itemId);
+      if(oldItem) oldItem.stock=(Number(oldItem.stock)||0)-Number(old.qty||0);
+      old.date=document.getElementById('p_date').value||todayStr();
+      old.supplier=document.getElementById('p_supplier').value.trim();
+      old.itemId=itemId; old.itemName=it.name; old.qty=qty; old.cost=cost; old.total=qty*cost;
+      old.paymentType=pay; old.bankId=pay==='بینک'?document.getElementById('p_bank').value:null;
+      it.stock=(Number(it.stock)||0)+qty;
+    }
+  } else {
+    const purchase={id:uid(), createdAt:Date.now(), date:document.getElementById('p_date').value||todayStr(),
+      supplier:document.getElementById('p_supplier').value.trim(), itemId, itemName:it.name, qty, cost,
+      total:qty*cost, paymentType:pay, bankId: pay==='بینک'?document.getElementById('p_bank').value:null};
+    DB.purchases.push(purchase);
+    it.stock=(Number(it.stock)||0)+qty;
+  }
+  await saveDB(); closeSheet(); renderPurchases(document.getElementById('main')); toast('خریداری محفوظ ہو گئی');
   } finally { unlockSubmit(); }
+}
+async function deletePurchase(id){
+  if(!(await customConfirm('یہ خریداری حذف کرنا چاہتے ہیں؟ اسٹاک واپس کم ہو جائے گا۔'))) return;
+  const p=DB.purchases.find(x=>x.id===id);
+  if(p){
+    trashPut('purchase', 'خریداری: '+(p.itemName||''), p);
+    const it=itemById(p.itemId); if(it) it.stock=(Number(it.stock)||0)-Number(p.qty||0);
+  }
+  DB.purchases=DB.purchases.filter(x=>x.id!==id);
+  await saveDB(); renderPurchases(document.getElementById('main')); toast('حذف ہو گئی (ری سائیکل بن میں محفوظ)');
 }
 
 /* ---- Cash Book ---- */
@@ -1227,10 +1274,11 @@ function renderCash(main){
   entries.sort((a,b)=>a.createdAt-b.createdAt);
   let bal=0;
   const rows=entries.map(e=>{ bal+=(Number(e.in)||0)-(Number(e.out)||0);
-    return `<div class="list-item"><div><div class="name">${esc(e.desc)}</div><div class="meta">${fmtDate(e.date)}</div></div>
+    return `<div class="list-item"><div><div class="name">${esc(e.desc)}</div><div class="meta">${fmtDateTime(e.date,e.createdAt)}</div></div>
       <div style="text-align:left;display:flex;align-items:center;gap:8px;">
       <div><div style="font-weight:800;color:${e.in?'var(--green)':'var(--red)'}">${e.in?'+':'-'}${money(e.in||e.out)}</div>
       <div class="meta">بیلنس: ${money(bal)}</div></div>
+      ${e.kind==='cash'?`<button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="openCashForm('${e.id}')">✏️</button>`:''}
       <button class="btn btn-red btn-sm" style="padding:6px 10px;" onclick="deleteLedgerEntry('${e.kind}','${e.id}')">🗑️</button>
       </div></div>`;
   }).reverse().join('');
@@ -1246,48 +1294,57 @@ function renderCash(main){
     <div class="card">${rows||'<div class="empty">کوئی انٹری نہیں</div>'}</div>
   `;
 }
-function openCashForm(){
+function openCashForm(entryId){
+  const e = entryId ? DB.cashEntries.find(x=>x.id===entryId) : null;
   const body=`
-    <label>تفصیل</label><input type="text" id="cash_desc" placeholder="مثلاً دکان کا کرایہ">
+    <label>تفصیل</label><input type="text" id="cash_desc" placeholder="مثلاً دکان کا کرایہ" value="${e?esc(e.desc):''}">
     <label>قسم</label>
-    <div class="seg"><button class="on" id="cash_in_btn" onclick="setCashType('in')">آمدنی (جمع)</button><button id="cash_out_btn" onclick="setCashType('out')">خرچہ (نکلوائی)</button></div>
-    <input type="hidden" id="cash_type" value="in">
-    <label>رقم</label><input type="number" id="cash_amt">
-    <label>تاریخ</label><input type="date" id="cash_date" value="${todayStr()}">
-    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCashEntry()">محفوظ کریں</button>
+    <div class="seg"><button class="${(!e||e.in)?'on':''}" id="cash_in_btn" onclick="setCashType('in')">آمدنی (جمع)</button><button class="${(e&&e.out)?'on':''}" id="cash_out_btn" onclick="setCashType('out')">خرچہ (نکلوائی)</button></div>
+    <input type="hidden" id="cash_type" value="${(e&&e.out)?'out':'in'}">
+    <label>رقم</label><input type="number" id="cash_amt" value="${e?(e.in||e.out):''}">
+    <label>تاریخ</label><input type="date" id="cash_date" value="${e?e.date:todayStr()}">
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCashEntry('${entryId||''}')">محفوظ کریں</button>
   `;
-  openSheet('نئی کیش انٹری', body);
+  openSheet(entryId?'انٹری میں ترمیم':'نئی کیش انٹری', body);
 }
 function setCashType(t){
   document.getElementById('cash_type').value=t;
   document.getElementById('cash_in_btn').classList.toggle('on',t==='in');
   document.getElementById('cash_out_btn').classList.toggle('on',t==='out');
 }
-async function saveCashEntry(){
+async function saveCashEntry(entryId){
   if(!lockSubmit()) return;
   try{
   const amt=parseFloat(document.getElementById('cash_amt').value)||0;
   const type=document.getElementById('cash_type').value;
   if(amt<=0){ toast('صحیح رقم لکھیں'); return; }
-  DB.cashEntries.push({id:uid(), createdAt:Date.now(), desc:document.getElementById('cash_desc').value.trim()||'انٹری',
-    date:document.getElementById('cash_date').value||todayStr(), in:type==='in'?amt:0, out:type==='out'?amt:0});
+  const desc=document.getElementById('cash_desc').value.trim()||'انٹری';
+  const date=document.getElementById('cash_date').value||todayStr();
+  if(entryId){
+    const e=DB.cashEntries.find(x=>x.id===entryId);
+    if(e){ e.desc=desc; e.date=date; e.in=type==='in'?amt:0; e.out=type==='out'?amt:0; }
+  } else {
+    DB.cashEntries.push({id:uid(), createdAt:Date.now(), desc, date, in:type==='in'?amt:0, out:type==='out'?amt:0});
+  }
   await saveDB(); closeSheet(); renderCash(document.getElementById('main')); toast('محفوظ ہو گیا');
   } finally { unlockSubmit(); }
 }
 async function deleteLedgerEntry(kind,id){
   if(!(await customConfirm('یہ انٹری حذف کرنا چاہتے ہیں؟'))) return;
   if(kind==='cash'){
+    const e=DB.cashEntries.find(x=>x.id===id);
+    if(e) trashPut('cash', 'کیش: '+e.desc, e);
     DB.cashEntries=DB.cashEntries.filter(e=>e.id!==id);
   } else if(kind==='sale'){
     const sale=DB.sales.find(s=>s.id===id);
-    if(sale){ (sale.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); }
+    if(sale){ trashPut('sale','بل: '+sale.invoiceNo, sale); (sale.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); }
     DB.sales=DB.sales.filter(s=>s.id!==id);
   } else if(kind==='purchase'){
     const purchase=DB.purchases.find(p=>p.id===id);
-    if(purchase){ const item=itemById(purchase.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(purchase.qty||0); }
+    if(purchase){ trashPut('purchase','خریداری: '+(purchase.itemName||''), purchase); const item=itemById(purchase.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(purchase.qty||0); }
     DB.purchases=DB.purchases.filter(p=>p.id!==id);
   }
-  await saveDB(); renderCash(document.getElementById('main')); toast('انٹری حذف ہو گئی');
+  await saveDB(); renderCash(document.getElementById('main')); toast('انٹری حذف ہو گئی (ری سائیکل بن میں محفوظ)');
 }
 
 /* ---- Banks ---- */
@@ -1346,9 +1403,10 @@ function openBankDetail(bankId){
   entries.sort((a,b)=>a.createdAt-b.createdAt);
   let bal=0;
   const rows=entries.map(e=>{bal+=(Number(e.in)||0)-(Number(e.out)||0);
-    return `<div class="list-item"><div><div class="name">${esc(e.desc)}</div><div class="meta">${fmtDate(e.date)}</div></div>
+    return `<div class="list-item"><div><div class="name">${esc(e.desc)}</div><div class="meta">${fmtDateTime(e.date,e.createdAt)}</div></div>
     <div style="display:flex;align-items:center;gap:8px;">
     <div style="font-weight:800;color:${e.in?'var(--green)':'var(--red)'}">${e.in?'+':'-'}${money(e.in||e.out)}</div>
+    ${e.kind==='bankEntry'?`<button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="openBankEntryForm('${bankId}','${e.id}')">✏️</button>`:''}
     <button class="btn btn-red btn-sm" style="padding:6px 10px;" onclick="deleteBankLedgerEntry('${e.kind}','${e.id}','${bankId}')">🗑️</button>
     </div></div>`;
   }).reverse().join('');
@@ -1397,30 +1455,37 @@ async function deleteBankLedgerEntry(kind,id,bankId){
   }
   await saveDB(); openBankDetail(bankId); toast('انٹری حذف ہو گئی');
 }
-function openBankEntryForm(bankId){
+function openBankEntryForm(bankId,entryId){
+  const e = entryId ? DB.bankEntries.find(x=>x.id===entryId) : null;
   const body=`
-    <label>تفصیل</label><input type="text" id="be_desc" placeholder="مثلاً کرایہ / ٹرانسفر">
-    <div class="seg"><button class="on" id="be_in_btn" onclick="setBankType('in')">جمع</button><button id="be_out_btn" onclick="setBankType('out')">نکلوائی</button></div>
-    <input type="hidden" id="be_type" value="in">
-    <label>رقم</label><input type="number" id="be_amt">
-    <label>تاریخ</label><input type="date" id="be_date" value="${todayStr()}">
-    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveBankEntry('${bankId}')">محفوظ کریں</button>
+    <label>تفصیل</label><input type="text" id="be_desc" placeholder="مثلاً کرایہ / ٹرانسفر" value="${e?esc(e.desc):''}">
+    <div class="seg"><button class="${(!e||e.in)?'on':''}" id="be_in_btn" onclick="setBankType('in')">جمع</button><button class="${(e&&e.out)?'on':''}" id="be_out_btn" onclick="setBankType('out')">نکلوائی</button></div>
+    <input type="hidden" id="be_type" value="${(e&&e.out)?'out':'in'}">
+    <label>رقم</label><input type="number" id="be_amt" value="${e?(e.in||e.out):''}">
+    <label>تاریخ</label><input type="date" id="be_date" value="${e?e.date:todayStr()}">
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="saveBankEntry('${bankId}','${entryId||''}')">محفوظ کریں</button>
   `;
-  openSheet('نئی بینک انٹری', body);
+  openSheet(entryId?'انٹری میں ترمیم':'نئی بینک انٹری', body);
 }
 function setBankType(t){
   document.getElementById('be_type').value=t;
   document.getElementById('be_in_btn').classList.toggle('on',t==='in');
   document.getElementById('be_out_btn').classList.toggle('on',t==='out');
 }
-async function saveBankEntry(bankId){
+async function saveBankEntry(bankId,entryId){
   if(!lockSubmit()) return;
   try{
   const amt=parseFloat(document.getElementById('be_amt').value)||0;
   const type=document.getElementById('be_type').value;
   if(amt<=0){ toast('صحیح رقم لکھیں'); return; }
-  DB.bankEntries.push({id:uid(), createdAt:Date.now(), bankId, desc:document.getElementById('be_desc').value.trim()||'انٹری',
-    date:document.getElementById('be_date').value||todayStr(), in:type==='in'?amt:0, out:type==='out'?amt:0});
+  const desc=document.getElementById('be_desc').value.trim()||'انٹری';
+  const date=document.getElementById('be_date').value||todayStr();
+  if(entryId){
+    const e=DB.bankEntries.find(x=>x.id===entryId);
+    if(e){ e.desc=desc; e.date=date; e.in=type==='in'?amt:0; e.out=type==='out'?amt:0; }
+  } else {
+    DB.bankEntries.push({id:uid(), createdAt:Date.now(), bankId, desc, date, in:type==='in'?amt:0, out:type==='out'?amt:0});
+  }
   await saveDB(); closeSheet(); openBankDetail(bankId); toast('محفوظ ہو گیا');
   } finally { unlockSubmit(); }
 }
