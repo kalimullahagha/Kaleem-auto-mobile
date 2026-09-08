@@ -248,7 +248,7 @@ function defaultDB(){
   return {
     shop:{ name:'کلیم آٹو موبائل', address:'پلاٹ نمبر بی 49، شیر جناح کالونی، اسٹاپ نمبر 20', phone:'', pin:'' },
     items:[], customers:[], banks:[], sales:[], purchases:[],
-    cashEntries:[], bankEntries:[], collections:[],
+    cashEntries:[], bankEntries:[], collections:[], trash:[],
     invoiceCounter: 0
   };
 }
@@ -294,6 +294,7 @@ function startFBListener(){
       remote.items=remote.items||[]; remote.customers=remote.customers||[]; remote.banks=remote.banks||[];
       remote.sales=remote.sales||[]; remote.purchases=remote.purchases||[]; remote.cashEntries=remote.cashEntries||[];
       remote.bankEntries=remote.bankEntries||[]; remote.collections=remote.collections||[]; remote.invoiceCounter=remote.invoiceCounter||0;
+      remote.trash=remote.trash||[];
       remote.shop=remote.shop||defaultDB().shop;
       DB=remote;
       try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
@@ -325,6 +326,7 @@ async function loadDB(){
   DB.items=DB.items||[]; DB.customers=DB.customers||[]; DB.banks=DB.banks||[];
   DB.sales=DB.sales||[]; DB.purchases=DB.purchases||[]; DB.cashEntries=DB.cashEntries||[];
   DB.bankEntries=DB.bankEntries||[]; DB.collections=DB.collections||[]; DB.invoiceCounter=DB.invoiceCounter||0;
+  DB.trash=DB.trash||[];
   if(hasFirebase) startFBListener();
 }
 let formSubmitting=false;
@@ -507,10 +509,8 @@ function renderPOS(main){
 
     <div class="card">
       <label>آئٹم شامل کریں</label>
-      <select id="posItemPick">
-        <option value="">— آئٹم منتخب کریں —</option>
-        ${DB.items.map(i=>`<option value="${i.id}">${esc(i.name)} (اسٹاک: ${i.stock}, قیمت: ${money(i.salePrice)})</option>`).join('')}
-      </select>
+      <input type="text" id="posItemSearch" placeholder="آئٹم کا نام یا بارکوڈ لکھیں..." autocomplete="off" oninput="filterPosItems(this.value)" onfocus="filterPosItems(this.value)">
+      <div id="posItemResults" style="position:relative;"></div>
       <div class="btn-row" style="margin-top:8px;">
         <input type="number" id="posQty" placeholder="مقدار" value="1" step="0.01" style="max-width:120px;">
         <button class="btn btn-navy" onclick="addToCart()">➕ کارٹ میں شامل کریں</button>
@@ -615,17 +615,41 @@ function cartHTML(){
   return rows + `<div class="totalsbox"><div class="tr"><span>سب ٹوٹل</span><span>${money(subtotal)}</span></div></div>`;
 }
 function setPosQty(v){ document.getElementById('posQty').value=v; }
+let posSelectedItemId=null;
+function filterPosItems(q){
+  const box=document.getElementById('posItemResults');
+  if(!box) return;
+  q=(q||'').trim();
+  if(!q){ box.innerHTML=''; return; }
+  const matches = DB.items.filter(i=> i.name.toLowerCase().includes(q.toLowerCase()) || (i.barcode||'').includes(q)).slice(0,8);
+  box.innerHTML = matches.length
+    ? `<div style="position:absolute;left:0;right:0;top:2px;background:#fff;border:1.5px solid var(--line);border-radius:10px;z-index:20;max-height:260px;overflow-y:auto;box-shadow:0 4px 14px rgba(0,0,0,.12);">
+        ${matches.map(i=>`<div class="list-item" style="padding:10px 12px;" onclick="selectPosItem('${i.id}')">
+          <div>${i.photo?`<img src="${i.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;margin-inline-end:8px;vertical-align:middle;">`:''}<span class="name">${esc(i.name)}</span><div class="meta">اسٹاک: ${i.stock} • قیمت: ${money(i.salePrice)}</div></div>
+        </div>`).join('')}
+       </div>`
+    : `<div style="position:absolute;left:0;right:0;top:2px;background:#fff;border:1.5px solid var(--line);border-radius:10px;z-index:20;padding:10px;color:var(--muted);">کوئی آئٹم نہیں ملا</div>`;
+}
+function selectPosItem(id){
+  const it=itemById(id);
+  if(!it) return;
+  posSelectedItemId=id;
+  const inp=document.getElementById('posItemSearch'); if(inp) inp.value=it.name;
+  const box=document.getElementById('posItemResults'); if(box) box.innerHTML='';
+}
 async function addToCart(){
-  const sel=document.getElementById('posItemPick');
   const qty=parseFloat(document.getElementById('posQty').value)||0;
-  if(!sel.value){ toast('پہلے آئٹم منتخب کریں'); return; }
+  if(!posSelectedItemId){ toast('پہلے آئٹم منتخب کریں'); return; }
   if(qty<=0){ toast('صحیح مقدار لکھیں'); return; }
-  const it=itemById(sel.value);
+  const it=itemById(posSelectedItemId);
+  if(!it){ toast('پہلے آئٹم منتخب کریں'); return; }
   if(qty>Number(it.stock)){ if(!(await customConfirm('اسٹاک سے زیادہ مقدار ہے، پھر بھی جاری رکھیں؟'))) return; }
   const existing=cart.find(c=>c.itemId===it.id);
   if(existing) existing.qty=Number(existing.qty)+qty;
   else cart.push({itemId:it.id,name:it.name,price:Number(it.salePrice),qty});
-  sel.value=''; document.getElementById('posQty').value=1;
+  posSelectedItemId=null;
+  const inp=document.getElementById('posItemSearch'); if(inp) inp.value='';
+  document.getElementById('posQty').value=1;
   document.getElementById('cartBox').innerHTML=cartHTML();
 }
 function updateCartQty(idx,val){ cart[idx].qty=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); }
@@ -751,9 +775,12 @@ function showInvoice(sale){
 async function deleteSaleFromInvoice(saleId){
   if(!(await customConfirm('یہ پورا بل حذف کرنا چاہتے ہیں؟ اسٹاک واپس ہو جائے گا۔'))) return;
   const sale=DB.sales.find(s=>s.id===saleId);
-  if(sale){ sale.items.forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); }
+  if(sale){
+    trashPut('sale', 'بل: '+sale.invoiceNo, sale);
+    sale.items.forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); });
+  }
   DB.sales=DB.sales.filter(s=>s.id!==saleId);
-  await saveDB(); closeSheet(); go('dash'); toast('بل حذف ہو گیا');
+  await saveDB(); closeSheet(); go('dash'); toast('بل حذف ہو گیا (ری سائیکل بن میں محفوظ)');
 }
 function printInvoice(saleId){
   const sale=DB.sales.find(s=>s.id===saleId);
@@ -784,17 +811,24 @@ function renderStock(main){
       ${filtered.length? filtered.map(i=>{
         const low=(Number(i.stock)||0)<=(Number(i.reorderLevel)||0);
         return `<div class="list-item" onclick="openItemForm('${i.id}')">
-          <div><div class="name">${esc(i.name)}</div><div class="meta">فروخت قیمت: ${money(i.salePrice)} • اسٹاک: ${i.stock}</div></div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            ${i.photo?`<img src="${i.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;">`:`<div style="width:44px;height:44px;border-radius:8px;background:#f0ede6;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">📦</div>`}
+            <div><div class="name">${esc(i.name)}</div><div class="meta">فروخت قیمت: ${money(i.salePrice)} • اسٹاک: ${i.stock}</div></div>
+          </div>
           <span class="badge ${low?'low':'ok'}">${low?'⚠️ کم':'ٹھیک'}</span>
         </div>`;
       }).join('') : `<div class="empty"><div class="ic">📦</div>${stockSearch?'اس بارکوڈ/نام سے کوئی آئٹم موجود نہیں':'کوئی آئٹم نہیں ملا'}<br><br><button class="btn btn-primary" onclick="openItemForm(null,'${esc(stockSearch)}')">+ نیا آئٹم شامل کریں</button></div>`}
     </div>
   `;
 }
+let itemFormPhoto=null;
 function openItemForm(id,prefillBarcode){
   const it = id ? itemById(id) : {name:'',barcode:prefillBarcode||'',category:'',costPrice:'',salePrice:'',stock:'',reorderLevel:5};
+  itemFormPhoto = it.photo || null;
   const body = `
     <label>آئٹم کا نام</label><input type="text" id="f_name" value="${esc(it.name)}">
+    <label>آئٹم کی تصویر (اختیاری)</label>
+    <div id="f_photo_wrap">${itemPhotoWrapHtml()}</div>
     <label>بارکوڈ (اختیاری)</label>
     <div class="btn-row">
       <input type="text" id="f_barcode" value="${esc(it.barcode||'')}" style="flex:1;">
@@ -816,6 +850,30 @@ function openItemForm(id,prefillBarcode){
   `;
   openSheet(id?'آئٹم میں تبدیلی':'نیا آئٹم', body);
 }
+function itemPhotoWrapHtml(){
+  return itemFormPhoto
+    ? `<img src="${itemFormPhoto}" style="max-width:140px;border-radius:10px;display:block;margin-bottom:8px;">
+       <button type="button" class="btn btn-outline btn-sm" onclick="itemFormPhoto=null; document.getElementById('f_photo_wrap').innerHTML=itemPhotoWrapHtml();">🗑️ تصویر ہٹائیں</button>`
+    : `<input type="file" accept="image/*" capture="environment" id="itemPhotoInput" style="display:none;" onchange="captureItemPhoto(this)">
+       <button type="button" class="btn btn-outline" onclick="document.getElementById('itemPhotoInput').click()">📷 تصویر لیں</button>`;
+}
+function captureItemPhoto(input){
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      const maxW=500; const scale=Math.min(1,maxW/img.width);
+      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+      itemFormPhoto=cv.toDataURL('image/jpeg',0.6);
+      const wrap=document.getElementById('f_photo_wrap');
+      if(wrap) wrap.innerHTML=itemPhotoWrapHtml();
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
 async function saveItem(id){
   if(!lockSubmit()) return;
   try{
@@ -827,6 +885,7 @@ async function saveItem(id){
     salePrice:parseFloat(document.getElementById('f_sale').value)||0,
     stock:parseFloat(document.getElementById('f_stock').value)||0,
     reorderLevel:parseFloat(document.getElementById('f_reorder').value)||0,
+    photo:itemFormPhoto||null,
   };
   if(!data.name){ toast('آئٹم کا نام لکھیں'); return; }
   if(id){ Object.assign(itemById(id),data); }
@@ -836,8 +895,10 @@ async function saveItem(id){
 }
 async function deleteItem(id){
   if(!(await customConfirm('یہ آئٹم حذف کرنا چاہتے ہیں؟'))) return;
+  const it=itemById(id);
+  if(it) trashPut('item', 'آئٹم: '+it.name, it);
   DB.items=DB.items.filter(i=>i.id!==id);
-  await saveDB(); closeSheet(); renderStock(document.getElementById('main'));
+  await saveDB(); closeSheet(); renderStock(document.getElementById('main')); toast('آئٹم حذف ہو گیا (ری سائیکل بن میں محفوظ)');
 }
 
 /* ===================== CUSTOMERS ===================== */
@@ -886,11 +947,24 @@ function openCustomerDetail(id){
   const c=custById(id);
   const due=custDue(c);
   const txns=[];
-  DB.sales.filter(s=>s.customerId===id).forEach(s=>txns.push({date:s.date,desc:s.invoiceNo+' — '+s.paymentType,amt:s.netTotal,type:'sale',id:s.id}));
-  DB.collections.filter(x=>x.customerId===id).forEach(x=>txns.push({date:x.date,desc:'وصولی'+(x.notes?' — '+x.notes:''),amt:-x.amount,type:'col',id:x.id}));
-  txns.sort((a,b)=> a.date<b.date?1:-1);
-  const rows = txns.length? txns.map(t=>`<div class="list-item" onclick="${t.type==='sale'?`openSaleFromCustomer('${t.id}')`:`confirmDeleteCollection('${t.id}','${id}')`}"><div><div class="name">${esc(t.desc)}</div><div class="meta">${fmtDate(t.date)}</div></div>
-      <div style="display:flex;align-items:center;gap:8px;"><div style="font-weight:800;color:${t.amt<0?'var(--green)':'var(--ink)'}">${t.amt<0?'-':''}${money(Math.abs(t.amt))}</div><span style="color:var(--red);font-size:15px;">🗑️</span></div></div>`).join('')
+  DB.sales.filter(s=>s.customerId===id).forEach(s=>txns.push({date:s.date,ts:s.createdAt||0,desc:s.invoiceNo+' — '+s.paymentType,amt:s.netTotal,type:'sale',id:s.id}));
+  DB.collections.filter(x=>x.customerId===id).forEach(x=>txns.push({date:x.date,ts:0,desc:'وصولی'+(x.notes?' — '+x.notes:''),amt:-x.amount,type:'col',id:x.id}));
+  // Compute running balance chronologically (oldest first), then show newest first.
+  const asc = txns.slice().sort((a,b)=> a.date>b.date?1 : a.date<b.date?-1 : (a.ts-b.ts));
+  let running = c.openingDue||0;
+  asc.forEach(t=>{ running += t.amt; t.balance = running; });
+  const totalGiven = txns.filter(t=>t.type==='sale').reduce((s,t)=>s+t.amt,0);
+  const totalReceived = txns.filter(t=>t.type==='col').reduce((s,t)=>s+Math.abs(t.amt),0);
+  const desc = asc.slice().reverse();
+  const rows = desc.length? desc.map(t=>`<div class="list-item" onclick="${t.type==='sale'?`openSaleFromCustomer('${t.id}')`:`confirmDeleteCollection('${t.id}','${id}')`}">
+      <div><div class="name">${esc(t.desc)}</div><div class="meta">${fmtDate(t.date)} • بیلنس: ${money(t.balance)}</div></div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="text-align:${document.dir==='rtl'?'left':'right'};">
+          <div style="font-size:11px;color:var(--muted);">${t.amt<0?'آپ کو ملے':'آپ نے دیے'}</div>
+          <div style="font-weight:800;color:${t.amt<0?'var(--green)':'var(--red)'}">${money(Math.abs(t.amt))}</div>
+        </div>
+        <span style="color:var(--red);font-size:15px;">🗑️</span>
+      </div></div>`).join('')
     : `<div class="empty">کوئی ٹرانزیکشن نہیں</div>`;
   const body=`
     <div class="grid2">
@@ -903,6 +977,10 @@ function openCustomerDetail(id){
     </div>
     <h3 style="margin-top:16px;color:var(--navy);font-size:14px;">مکمل حساب</h3>
     ${rows}
+    <div class="btn-row" style="margin-top:12px;">
+      <div class="stat good" style="flex:1;"><div class="label">آپ کو ملے (کل)</div><div class="value" style="font-size:16px;">${money(totalReceived)}</div></div>
+      <div class="stat warn" style="flex:1;"><div class="label">آپ نے دیے (کل)</div><div class="value" style="font-size:16px;">${money(totalGiven)}</div></div>
+    </div>
     <button class="btn btn-outline" style="margin-top:10px;" onclick="openCustomerEdit('${c.id}')">✏️ تفصیل تبدیل کریں</button>
     <button class="btn btn-red" style="margin-top:8px;" onclick="deleteCustomer('${c.id}')">🗑️ یہ کسٹمر حذف کریں</button>
   `;
@@ -953,12 +1031,16 @@ async function updateCustomer(id){
   await saveDB(); closeSheet(); renderCustomers(document.getElementById('main')); toast('محفوظ ہو گیا');
 }
 async function deleteCustomer(id){
-  if(!(await customConfirm('اس کسٹمر کو حذف کرنا چاہتے ہیں؟ اس کسٹمر کا تمام حساب (بل اور وصولی) بھی حذف ہو جائے گا۔'))) return;
-  DB.sales.filter(s=>s.customerId===id).forEach(s=>{ s.items.forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); });
+  if(!(await customConfirm('اس کسٹمر کو حذف کرنا چاہتے ہیں؟ اس کسٹمر کا تمام حساب (بل اور وصولی) بھی حذف ہو جائے گا۔ (یہ ری سائیکل بن میں 200 اندراجات تک محفوظ رہے گا)'))) return;
+  const c=custById(id);
+  const relSales=DB.sales.filter(s=>s.customerId===id);
+  const relCollections=DB.collections.filter(x=>x.customerId===id);
+  trashPut('customer', 'کسٹمر: '+c.name, { customer:c, sales:relSales, collections:relCollections });
+  relSales.forEach(s=>{ s.items.forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); });
   DB.sales=DB.sales.filter(s=>s.customerId!==id);
   DB.collections=DB.collections.filter(x=>x.customerId!==id);
   DB.customers=DB.customers.filter(c=>c.id!==id);
-  await saveDB(); closeSheet(); renderCustomers(document.getElementById('main')); toast('کسٹمر حذف ہو گیا');
+  await saveDB(); closeSheet(); renderCustomers(document.getElementById('main')); toast('کسٹمر حذف ہو گیا (ری سائیکل بن میں محفوظ)');
 }
 function openSaleFromCustomer(saleId){
   const sale=DB.sales.find(s=>s.id===saleId);
@@ -967,6 +1049,8 @@ function openSaleFromCustomer(saleId){
 }
 async function confirmDeleteCollection(colId,custId){
   if(!(await customConfirm('یہ وصولی کی انٹری حذف کرنا چاہتے ہیں؟'))) return;
+  const col=DB.collections.find(x=>x.id===colId);
+  if(col) trashPut('collection', 'وصولی: '+money(col.amount), col);
   DB.collections=DB.collections.filter(x=>x.id!==colId);
   await saveDB(); openCustomerDetail(custId); toast('انٹری حذف ہو گئی');
 }
@@ -980,6 +1064,7 @@ function renderMore(main){
         <div class="list-item" onclick="moreView='purchases';render()"><div class="name">📥 خریداری (سپلائر سے مال)</div><span>›</span></div>
         <div class="list-item" onclick="moreView='cash';render()"><div class="name">💵 کیش بک</div><span>›</span></div>
         <div class="list-item" onclick="moreView='banks';render()"><div class="name">🏦 بینک اکاؤنٹس</div><span>›</span></div>
+        <div class="list-item" onclick="moreView='trash';render()"><div class="name">🗑️ ری سائیکل بن${DB.trash&&DB.trash.length?` (${DB.trash.length})`:''}</div><span>›</span></div>
         <div class="list-item" onclick="moreView='settings';render()"><div class="name">⚙️ دکان کی سیٹنگز</div><span>›</span></div>
       </div>
     `;
@@ -988,9 +1073,71 @@ function renderMore(main){
   if(moreView==='purchases') return renderPurchases(main);
   if(moreView==='cash') return renderCash(main);
   if(moreView==='banks') return renderBanks(main);
+  if(moreView==='trash') return renderTrash(main);
   if(moreView==='settings') return renderSettings(main);
 }
 function backToMoreMenu(){ moreView='menu'; render(); }
+
+/* ===================== RECYCLE BIN ===================== */
+function trashPut(type, label, data){
+  DB.trash = DB.trash||[];
+  DB.trash.unshift({ id:uid(), type, label, data, deletedAt:Date.now() });
+  if(DB.trash.length>200) DB.trash.length=200;
+}
+function trashTimeAgo(ts){
+  const mins=Math.floor((Date.now()-ts)/60000);
+  if(mins<1) return 'ابھی ابھی';
+  if(mins<60) return mins+' منٹ پہلے';
+  const hrs=Math.floor(mins/60);
+  if(hrs<24) return hrs+' گھنٹے پہلے';
+  return Math.floor(hrs/24)+' دن پہلے';
+}
+function renderTrash(main){
+  const items = DB.trash||[];
+  main.innerHTML = `
+    <button class="btn btn-outline" style="margin-bottom:10px;" onclick="backToMoreMenu()">‹ واپس</button>
+    <div class="card">
+      ${items.length? items.map(t=>`
+        <div class="list-item">
+          <div><div class="name">${esc(t.label)}</div><div class="meta">${trashTimeAgo(t.deletedAt)}</div></div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-outline btn-sm" onclick="restoreFromTrash('${t.id}')">↩️ بحال کریں</button>
+            <button class="btn btn-red btn-sm" onclick="permanentDeleteTrash('${t.id}')">حذف</button>
+          </div>
+        </div>`).join('')
+      : `<div class="empty">ری سائیکل بن خالی ہے</div>`}
+    </div>
+  `;
+}
+async function permanentDeleteTrash(trashId){
+  if(!(await customConfirm('اسے ہمیشہ کے لیے حذف کرنا چاہتے ہیں؟ یہ واپس نہیں آئے گا۔'))) return;
+  DB.trash = (DB.trash||[]).filter(t=>t.id!==trashId);
+  await saveDB(); renderTrash(document.getElementById('main')); toast('ہمیشہ کے لیے حذف ہو گیا');
+}
+async function restoreFromTrash(trashId){
+  const t = (DB.trash||[]).find(x=>x.id===trashId);
+  if(!t) return;
+  const d = t.data;
+  if(t.type==='customer'){
+    DB.customers.push(d.customer);
+    (d.sales||[]).forEach(s=>{ DB.sales.push(s); (s.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(it.qty||0); }); });
+    (d.collections||[]).forEach(c=>DB.collections.push(c));
+  } else if(t.type==='item'){
+    DB.items.push(d);
+  } else if(t.type==='bank'){
+    DB.banks.push(d.bank);
+    (d.bankEntries||[]).forEach(e=>DB.bankEntries.push(e));
+    (d.sales||[]).forEach(s=>{ DB.sales.push(s); (s.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(it.qty||0); }); });
+    (d.purchases||[]).forEach(p=>{ DB.purchases.push(p); const item=itemById(p.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(p.qty||0); });
+  } else if(t.type==='sale'){
+    DB.sales.push(d);
+    (d.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(it.qty||0); });
+  } else if(t.type==='collection'){
+    DB.collections.push(d);
+  }
+  DB.trash = (DB.trash||[]).filter(x=>x.id!==trashId);
+  await saveDB(); renderTrash(document.getElementById('main')); toast('بحال ہو گیا');
+}
 
 /* ---- Purchases ---- */
 function renderPurchases(main){
@@ -1198,13 +1345,18 @@ async function deleteBank(bankId){
     ? 'اس بینک اکاؤنٹ کی تمام انٹریاں اور اس سے جڑے بل بھی حذف ہو جائیں گے۔ یقینی بنائیں؟'
     : 'یہ بینک اکاؤنٹ حذف کرنا چاہتے ہیں؟';
   if(!(await customConfirm(msg))) return;
-  DB.sales.filter(s=>s.bankId===bankId).forEach(s=>{ (s.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); });
-  DB.purchases.filter(p=>p.bankId===bankId).forEach(p=>{ const item=itemById(p.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(p.qty||0); });
+  const bank=DB.banks.find(b=>b.id===bankId);
+  const relEntries=DB.bankEntries.filter(e=>e.bankId===bankId);
+  const relSales=DB.sales.filter(s=>s.bankId===bankId);
+  const relPurchases=DB.purchases.filter(p=>p.bankId===bankId);
+  if(bank) trashPut('bank', 'بینک: '+bank.name, { bank, bankEntries:relEntries, sales:relSales, purchases:relPurchases });
+  relSales.forEach(s=>{ (s.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); });
+  relPurchases.forEach(p=>{ const item=itemById(p.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(p.qty||0); });
   DB.sales=DB.sales.filter(s=>s.bankId!==bankId);
   DB.purchases=DB.purchases.filter(p=>p.bankId!==bankId);
   DB.bankEntries=DB.bankEntries.filter(e=>e.bankId!==bankId);
   DB.banks=DB.banks.filter(b=>b.id!==bankId);
-  await saveDB(); closeSheet(); renderBanks(document.getElementById('main')); toast('بینک اکاؤنٹ حذف ہو گیا');
+  await saveDB(); closeSheet(); renderBanks(document.getElementById('main')); toast('بینک اکاؤنٹ حذف ہو گیا (ری سائیکل بن میں محفوظ)');
 }
 async function deleteBankLedgerEntry(kind,id,bankId){
   if(!(await customConfirm('یہ انٹری حذف کرنا چاہتے ہیں؟'))) return;
@@ -1368,11 +1520,24 @@ function openBarcodeScanner(callback){
   Quagga.offDetected();
   Quagga.onDetected(onBarcodeDetected);
 }
+function playBeep(){
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const osc = ctx.createOscillator(); const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type='sine'; osc.frequency.value=1500;
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.15);
+    osc.start(); osc.stop(ctx.currentTime+0.15);
+    setTimeout(()=>ctx.close(), 300);
+  }catch(e){}
+}
 function onBarcodeDetected(result){
   if(scannerBusy) return;
   const code = result && result.codeResult ? result.codeResult.code : null;
   if(!code) return;
   scannerBusy=true;
+  playBeep();
   if(navigator.vibrate) navigator.vibrate(120);
   const cb=scannerCallback;
   closeScanner();
