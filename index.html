@@ -557,8 +557,12 @@ function renderPOS(main){
       <label>بل کی تصویر (اختیاری)</label>
       ${posBillImage ? `<img src="${posBillImage}" style="max-width:100%;border-radius:10px;margin-bottom:8px;">
       <button class="btn btn-outline btn-sm" onclick="posBillImage=null; renderPOS(document.getElementById('main'))">🗑️ تصویر ہٹائیں</button>`
-      : `<input type="file" accept="image/*" id="billPhotoInput" style="display:none;" onchange="capturePOSBillPhoto(this)">
-      <button class="btn btn-outline" onclick="document.getElementById('billPhotoInput').click()">📷 بل کی تصویر لیں</button>`}
+      : `<input type="file" accept="image/*" capture="environment" id="billPhotoInputCam" style="display:none;" onchange="capturePOSBillPhoto(this)">
+      <input type="file" accept="image/*" id="billPhotoInputGal" style="display:none;" onchange="capturePOSBillPhoto(this)">
+      <div class="btn-row">
+        <button class="btn btn-outline" style="flex:1;" onclick="document.getElementById('billPhotoInputCam').click()">📷 کیمرہ</button>
+        <button class="btn btn-outline" style="flex:1;" onclick="document.getElementById('billPhotoInputGal').click()">🖼️ گیلری</button>
+      </div>`}
     </div>
 
     <button class="btn btn-primary" style="margin-top:4px;" onclick="finalizeSale()">${editingSaleId?'✅ ترمیم محفوظ کریں':'✅ سیل مکمل کریں اور بل بنائیں'}</button>
@@ -854,8 +858,12 @@ function itemPhotoWrapHtml(){
   return itemFormPhoto
     ? `<img src="${itemFormPhoto}" style="max-width:140px;border-radius:10px;display:block;margin-bottom:8px;">
        <button type="button" class="btn btn-outline btn-sm" onclick="itemFormPhoto=null; document.getElementById('f_photo_wrap').innerHTML=itemPhotoWrapHtml();">🗑️ تصویر ہٹائیں</button>`
-    : `<input type="file" accept="image/*" id="itemPhotoInput" style="display:none;" onchange="captureItemPhoto(this)">
-       <button type="button" class="btn btn-outline" onclick="document.getElementById('itemPhotoInput').click()">📷 تصویر لیں</button>`;
+    : `<input type="file" accept="image/*" capture="environment" id="itemPhotoInputCam" style="display:none;" onchange="captureItemPhoto(this)">
+       <input type="file" accept="image/*" id="itemPhotoInputGal" style="display:none;" onchange="captureItemPhoto(this)">
+       <div class="btn-row">
+         <button type="button" class="btn btn-outline" style="flex:1;" onclick="document.getElementById('itemPhotoInputCam').click()">📷 کیمرہ</button>
+         <button type="button" class="btn btn-outline" style="flex:1;" onclick="document.getElementById('itemPhotoInputGal').click()">🖼️ گیلری</button>
+       </div>`;
 }
 function captureItemPhoto(input){
   const file=input.files[0]; if(!file) return;
