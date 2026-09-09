@@ -413,7 +413,7 @@ function bankById(id){ return DB.banks.find(b=>b.id===id); }
 function custDue(c){
   let due = Number(c.openingDue)||0;
   DB.sales.forEach(s=>{ if(s.customerId===c.id && s.paymentType==='ادھار') due += s.netTotal; });
-  DB.collections.forEach(col=>{ if(col.customerId===c.id) due -= Number(col.amount)||0; });
+  DB.collections.forEach(col=>{ if(col.customerId===c.id){ due += col.type==='given' ? (Number(col.amount)||0) : -(Number(col.amount)||0); } });
   return due;
 }
 function cashBalance(){
@@ -972,18 +972,24 @@ async function saveCustomer(fromPOS){
   toast('کسٹمر شامل ہو گیا');
   } finally { unlockSubmit(); }
 }
-function openCustomerDetail(id){
+function computeCustomerLedger(id){
   const c=custById(id);
   const due=custDue(c);
   const txns=[];
   DB.sales.filter(s=>s.customerId===id).forEach(s=>txns.push({date:s.date,ts:s.createdAt||0,desc:s.invoiceNo+' — '+s.paymentType,amt:s.netTotal,type:'sale',id:s.id}));
-  DB.collections.filter(x=>x.customerId===id).forEach(x=>txns.push({date:x.date,ts:x.createdAt||0,desc:'وصولی'+(x.notes?' — '+x.notes:''),amt:-x.amount,type:'col',id:x.id}));
-  // Compute running balance chronologically (oldest first), then show newest first.
+  DB.collections.filter(x=>x.customerId===id).forEach(x=>{
+    const isGiven = x.type==='given';
+    txns.push({date:x.date,ts:x.createdAt||0,desc:(isGiven?'رقم دی':'وصولی')+(x.notes?' — '+x.notes:''),amt:isGiven?x.amount:-x.amount,type:'col',id:x.id});
+  });
   const asc = txns.slice().sort((a,b)=> a.date>b.date?1 : a.date<b.date?-1 : (a.ts-b.ts));
   let running = c.openingDue||0;
   asc.forEach(t=>{ running += t.amt; t.balance = running; });
-  const totalGiven = txns.filter(t=>t.type==='sale').reduce((s,t)=>s+t.amt,0);
-  const totalReceived = txns.filter(t=>t.type==='col').reduce((s,t)=>s+Math.abs(t.amt),0);
+  const totalGiven = txns.filter(t=>t.amt>0).reduce((s,t)=>s+t.amt,0);
+  const totalReceived = txns.filter(t=>t.amt<0).reduce((s,t)=>s+Math.abs(t.amt),0);
+  return { c, due, asc, totalGiven, totalReceived };
+}
+function openCustomerDetail(id){
+  const {c, due, asc, totalGiven, totalReceived} = computeCustomerLedger(id);
   const desc = asc.slice().reverse();
   const rows = desc.length? desc.map(t=>`<div class="list-item">
       <div style="flex:1;cursor:pointer;" onclick="${t.type==='sale'?`openSaleFromCustomer('${t.id}')`:`editCollectionFromLedger('${t.id}','${id}')`}">
@@ -1004,7 +1010,12 @@ function openCustomerDetail(id){
     </div>
     <div class="btn-row" style="margin-top:10px;">
       <button class="btn wa" onclick="waReminder('${c.id}')">📲 یاد دہانی بھیجیں</button>
-      <button class="btn btn-outline" onclick="openCollectionForm('${c.id}')">💳 وصولی درج کریں</button>
+      <button class="btn btn-outline" onclick="openCollectionForm('${c.id}',null,'received')">💳 وصولی درج کریں</button>
+      <button class="btn btn-outline" onclick="openCollectionForm('${c.id}',null,'given')">➖ رقم دیں (قرض)</button>
+    </div>
+    <div class="btn-row" style="margin-top:8px;">
+      <button class="btn btn-outline" onclick="printCustomerLedger('${c.id}')">🖨️ پرنٹ / PDF بنائیں</button>
+      <button class="btn wa" onclick="waCustomerLedger('${c.id}')">📲 حساب واٹس ایپ پر بھیجیں</button>
     </div>
     <h3 style="margin-top:16px;color:var(--navy);font-size:14px;">مکمل حساب</h3>
     ${rows}
@@ -1017,21 +1028,65 @@ function openCustomerDetail(id){
   `;
   openSheet(c.name, body);
 }
+function printCustomerLedger(id){
+  const {c, due, asc, totalGiven, totalReceived} = computeCustomerLedger(id);
+  const rows = asc.slice().reverse().map(t=>`
+    <tr>
+      <td style="padding:6px;border-bottom:1px solid #ddd;">${fmtDateTime(t.date,t.ts)}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;">${esc(t.desc)}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;text-align:center;">${t.amt<0?money(Math.abs(t.amt)):''}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;text-align:center;">${t.amt>0?money(t.amt):''}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;text-align:center;">${money(t.balance)}</td>
+    </tr>`).join('');
+  const html = `
+    <div style="direction:rtl;font-family:inherit;padding:10px;">
+      <h2 style="margin:0;">${esc(DB.shop.name)}</h2>
+      <div style="font-size:12px;color:#555;">${esc(DB.shop.address||'')}</div>
+      <h3 style="margin-top:14px;">کسٹمر حساب — ${esc(c.name)}</h3>
+      <div style="font-size:13px;">${esc(c.phone||'')} • تاریخ: ${fmtDate(todayStr())}</div>
+      <table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;">
+        <thead><tr style="background:#f0ede6;">
+          <th style="padding:6px;">تاریخ</th><th style="padding:6px;">تفصیل</th>
+          <th style="padding:6px;">آپ کو ملے</th><th style="padding:6px;">آپ نے دیے</th><th style="padding:6px;">بیلنس</th>
+        </tr></thead>
+        <tbody>${rows||'<tr><td colspan="5" style="padding:10px;text-align:center;">کوئی ٹرانزیکشن نہیں</td></tr>'}</tbody>
+      </table>
+      <div style="margin-top:14px;font-weight:800;font-size:15px;">
+        کل آپ کو ملے: ${money(totalReceived)} &nbsp;&nbsp; کل آپ نے دیے: ${money(totalGiven)} &nbsp;&nbsp; باقی رقم: ${money(due)}
+      </div>
+    </div>`;
+  document.getElementById('printArea').innerHTML = html;
+  document.getElementById('printArea').style.display='block';
+  window.print();
+  setTimeout(()=>{document.getElementById('printArea').style.display='none';},500);
+}
+function waCustomerLedger(id){
+  const {c, due, asc, totalGiven, totalReceived} = computeCustomerLedger(id);
+  if(!c.phone){ toast('واٹس ایپ نمبر موجود نہیں'); return; }
+  let text = `*${DB.shop.name}*\nکسٹمر حساب: ${c.name}\n\n`;
+  asc.slice().reverse().slice(0,25).forEach(t=>{
+    text += `${fmtDateTime(t.date,t.ts)} — ${t.desc}: ${t.amt<0?'ملے '+money(Math.abs(t.amt)):'دیے '+money(t.amt)} (بیلنس ${money(t.balance)})\n`;
+  });
+  text += `\nکل آپ کو ملے: ${money(totalReceived)}\nکل آپ نے دیے: ${money(totalGiven)}\n*باقی رقم: ${money(due)}*`;
+  window.open(waLink(c.phone,text),'_blank');
+}
 function waReminder(id){
   const c=custById(id); const due=custDue(c);
   if(!c.phone){ toast('واٹس ایپ نمبر موجود نہیں'); return; }
   const text=`السلام علیکم ${c.name}، آپ کے ذمے ${DB.shop.name} کی ${money(due)} روپے رقم باقی ہے۔ براہ کرم جلد ادائیگی کریں۔ شکریہ`;
   window.open(waLink(c.phone,text),'_blank');
 }
-function openCollectionForm(custId,colId){
+function openCollectionForm(custId,colId,defaultType){
   const c = colId ? DB.collections.find(x=>x.id===colId) : null;
+  const type = c ? (c.type||'received') : (defaultType||'received');
   const body=`
+    <input type="hidden" id="col_type" value="${type}">
     <label>رقم</label><input type="number" id="col_amt" value="${c?c.amount:''}">
     <label>تاریخ</label><input type="date" id="col_date" value="${c?c.date:todayStr()}">
     <label>نوٹس</label><input type="text" id="col_notes" value="${c?esc(c.notes||''):''}">
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCollection('${custId}','${colId||''}')">محفوظ کریں</button>
   `;
-  openSheet(colId?'وصولی میں ترمیم':'وصولی درج کریں', body);
+  openSheet(colId?'ترمیم': (type==='given'?'رقم دیں (قرض)':'وصولی درج کریں'), body);
 }
 async function saveCollection(custId,colId){
   if(!lockSubmit()) return;
@@ -1040,11 +1095,12 @@ async function saveCollection(custId,colId){
   if(amount<=0){ toast('صحیح رقم لکھیں'); return; }
   const date=document.getElementById('col_date').value||todayStr();
   const notes=document.getElementById('col_notes').value.trim();
+  const type=document.getElementById('col_type').value||'received';
   if(colId){
     const c=DB.collections.find(x=>x.id===colId);
-    if(c){ c.amount=amount; c.date=date; c.notes=notes; }
+    if(c){ c.amount=amount; c.date=date; c.notes=notes; c.type=type; }
   } else {
-    DB.collections.push({id:uid(), createdAt:Date.now(), customerId:custId, amount, date, notes});
+    DB.collections.push({id:uid(), createdAt:Date.now(), customerId:custId, amount, date, notes, type});
   }
   await saveDB(); closeSheet(); openCustomerDetail(custId); toast('وصولی محفوظ ہو گئی');
   } finally { unlockSubmit(); }
@@ -1184,11 +1240,13 @@ function openAmanatDetail(id){
   const rows = entries.map(e=>{ running += e.type==='in'?Number(e.amount):-Number(e.amount);
     return `<div class="list-item">
       <div style="flex:1;cursor:pointer;" onclick="openAmanatEntryForm('${id}','${e.id}')">
-        <div class="name">${esc(e.notes||(e.type==='in'?'امانت رکھی':'واپس کی'))}</div>
+        <div class="name">${esc(e.notes||(e.type==='in'?'امانت رکھی':'واپس کی'))}${e.photo?' 📎':''}${e.signature?' ✍️':''}</div>
         <div class="meta">${fmtDateTime(e.date,e.createdAt)} • بیلنس: ${money(running)}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="font-weight:800;color:${e.type==='in'?'var(--red)':'var(--green)'}">${e.type==='in'?'+':'-'}${money(e.amount)}</div>
+        ${e.photo?`<button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="viewPhoto('${e.photo}')">🖼️</button>`:''}
+        ${e.signature?`<button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="viewPhoto('${e.signature}')">✍️</button>`:''}
         <button class="btn btn-red btn-sm" style="padding:6px 10px;" onclick="deleteAmanatEntry('${id}','${e.id}')">🗑️</button>
       </div></div>`;
   }).reverse().join('');
@@ -1206,18 +1264,75 @@ function openAmanatDetail(id){
   `;
   openSheet(p.name, body);
 }
+let amPhoto=null, amSignature=null;
 function openAmanatEntryForm(personId,entryId,defaultType){
   const e = entryId ? DB.amanatEntries.find(x=>x.id===entryId) : null;
   const type = e ? e.type : (defaultType||'in');
+  amPhoto = e ? (e.photo||null) : null;
+  amSignature = e ? (e.signature||null) : null;
   const body=`
     <div class="seg"><button class="${type==='in'?'on':''}" id="am_in_btn" onclick="setAmanatType('in')">امانت رکھی (لی)</button><button class="${type==='out'?'on':''}" id="am_out_btn" onclick="setAmanatType('out')">واپس کی (دی)</button></div>
     <input type="hidden" id="am_type" value="${type}">
     <label>رقم</label><input type="number" id="am_amt" value="${e?e.amount:''}">
     <label>تاریخ</label><input type="date" id="am_date" value="${e?e.date:todayStr()}">
     <label>نوٹس (اختیاری)</label><input type="text" id="am_notes" value="${e?esc(e.notes||''):''}">
+    <label>رسید کی تصویر (اختیاری)</label>
+    <div id="am_photo_wrap">${amPhotoWrapHtml()}</div>
+    <label>دستخط (اختیاری)</label>
+    <canvas id="amSigPad" style="width:100%;height:120px;border:1.5px dashed var(--line);border-radius:10px;touch-action:none;background:#fff;"></canvas>
+    <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="clearAmSignature()">🧹 دستخط صاف کریں</button>
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveAmanatEntry('${personId}','${entryId||''}')">محفوظ کریں</button>
   `;
   openSheet(entryId?'انٹری میں ترمیم':'نئی امانت انٹری', body);
+  initAmSignaturePad();
+}
+function amPhotoWrapHtml(){
+  return amPhoto
+    ? `<img src="${amPhoto}" style="max-width:140px;border-radius:10px;display:block;margin-bottom:8px;">
+       <button type="button" class="btn btn-outline btn-sm" onclick="amPhoto=null; document.getElementById('am_photo_wrap').innerHTML=amPhotoWrapHtml();">🗑️ تصویر ہٹائیں</button>`
+    : `<input type="file" accept="image/*" capture="environment" id="amPhotoInputCam" style="display:none;" onchange="captureAmPhoto(this)">
+       <input type="file" accept="image/*" id="amPhotoInputGal" style="display:none;" onchange="captureAmPhoto(this)">
+       <div class="btn-row">
+         <button type="button" class="btn btn-outline" style="flex:1;" onclick="document.getElementById('amPhotoInputCam').click()">📷 کیمرہ</button>
+         <button type="button" class="btn btn-outline" style="flex:1;" onclick="document.getElementById('amPhotoInputGal').click()">🖼️ گیلری</button>
+       </div>`;
+}
+function captureAmPhoto(input){
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      const maxW=700; const scale=Math.min(1,maxW/img.width);
+      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+      amPhoto=cv.toDataURL('image/jpeg',0.6);
+      const wrap=document.getElementById('am_photo_wrap'); if(wrap) wrap.innerHTML=amPhotoWrapHtml();
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function initAmSignaturePad(){
+  const canvas=document.getElementById('amSigPad');
+  if(!canvas) return;
+  const ratio=window.devicePixelRatio||1;
+  canvas.width=canvas.clientWidth*ratio; canvas.height=canvas.clientHeight*ratio;
+  const ctx=canvas.getContext('2d');
+  ctx.scale(ratio,ratio); ctx.lineWidth=2; ctx.lineCap='round'; ctx.strokeStyle='#1a1a2e';
+  if(amSignature){ const img=new Image(); img.onload=()=>ctx.drawImage(img,0,0,canvas.clientWidth,canvas.clientHeight); img.src=amSignature; }
+  let drawing=false, last=null;
+  function pos(e){ const r=canvas.getBoundingClientRect(); const t=e.touches?e.touches[0]:e; return {x:t.clientX-r.left, y:t.clientY-r.top}; }
+  function start(e){ drawing=true; last=pos(e); e.preventDefault(); }
+  function move(e){ if(!drawing) return; const p=pos(e); ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault(); }
+  function end(){ if(!drawing) return; drawing=false; amSignature=canvas.toDataURL('image/png'); }
+  canvas.addEventListener('mousedown',start); canvas.addEventListener('mousemove',move); canvas.addEventListener('mouseup',end); canvas.addEventListener('mouseleave',end);
+  canvas.addEventListener('touchstart',start); canvas.addEventListener('touchmove',move); canvas.addEventListener('touchend',end);
+}
+function clearAmSignature(){
+  amSignature=null;
+  const canvas=document.getElementById('amSigPad');
+  if(canvas){ const ctx=canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); }
 }
 function setAmanatType(t){
   document.getElementById('am_type').value=t;
@@ -1234,10 +1349,11 @@ async function saveAmanatEntry(personId,entryId){
   const notes=document.getElementById('am_notes').value.trim();
   if(entryId){
     const e=DB.amanatEntries.find(x=>x.id===entryId);
-    if(e){ e.amount=amount; e.type=type; e.date=date; e.notes=notes; }
+    if(e){ e.amount=amount; e.type=type; e.date=date; e.notes=notes; e.photo=amPhoto||null; e.signature=amSignature||null; }
   } else {
-    DB.amanatEntries.push({id:uid(), createdAt:Date.now(), personId, amount, type, date, notes});
+    DB.amanatEntries.push({id:uid(), createdAt:Date.now(), personId, amount, type, date, notes, photo:amPhoto||null, signature:amSignature||null});
   }
+  amPhoto=null; amSignature=null;
   await saveDB(); closeSheet(); openAmanatDetail(personId); toast('محفوظ ہو گیا');
   } finally { unlockSubmit(); }
 }
@@ -1536,15 +1652,16 @@ async function saveBank(){
 function openBankDetail(bankId){
   const b=bankById(bankId);
   const entries=[];
-  DB.bankEntries.filter(e=>e.bankId===bankId).forEach(e=>entries.push({date:e.date,desc:e.desc,in:e.in,out:e.out,createdAt:e.createdAt||0,kind:'bankEntry',id:e.id}));
+  DB.bankEntries.filter(e=>e.bankId===bankId).forEach(e=>entries.push({date:e.date,desc:e.desc,in:e.in,out:e.out,createdAt:e.createdAt||0,kind:'bankEntry',id:e.id,photo:e.photo||null}));
   DB.sales.filter(s=>s.paymentType==='بینک'&&s.bankId===bankId).forEach(s=>entries.push({date:s.date,desc:'POS سیل — '+s.invoiceNo,in:s.netTotal,out:0,createdAt:s.createdAt,kind:'sale',id:s.id}));
   DB.purchases.filter(p=>p.paymentType==='بینک'&&p.bankId===bankId).forEach(p=>entries.push({date:p.date,desc:'خریداری',in:0,out:p.total,createdAt:p.createdAt,kind:'purchase',id:p.id}));
   entries.sort((a,b)=>a.createdAt-b.createdAt);
   let bal=0;
   const rows=entries.map(e=>{bal+=(Number(e.in)||0)-(Number(e.out)||0);
-    return `<div class="list-item"><div><div class="name">${esc(e.desc)}</div><div class="meta">${fmtDateTime(e.date,e.createdAt)}</div></div>
+    return `<div class="list-item"><div><div class="name">${esc(e.desc)}${e.photo?' 📎':''}</div><div class="meta">${fmtDateTime(e.date,e.createdAt)}</div></div>
     <div style="display:flex;align-items:center;gap:8px;">
     <div style="font-weight:800;color:${e.in?'var(--green)':'var(--red)'}">${e.in?'+':'-'}${money(e.in||e.out)}</div>
+    ${e.photo?`<button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="viewPhoto('${e.photo}')">🖼️</button>`:''}
     ${e.kind==='bankEntry'?`<button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="openBankEntryForm('${bankId}','${e.id}')">✏️</button>`:''}
     <button class="btn btn-red btn-sm" style="padding:6px 10px;" onclick="deleteBankLedgerEntry('${e.kind}','${e.id}','${bankId}')">🗑️</button>
     </div></div>`;
@@ -1594,17 +1711,48 @@ async function deleteBankLedgerEntry(kind,id,bankId){
   }
   await saveDB(); openBankDetail(bankId); toast('انٹری حذف ہو گئی');
 }
+let bePhoto=null;
 function openBankEntryForm(bankId,entryId){
   const e = entryId ? DB.bankEntries.find(x=>x.id===entryId) : null;
+  bePhoto = e ? (e.photo||null) : null;
   const body=`
     <label>تفصیل</label><input type="text" id="be_desc" placeholder="مثلاً کرایہ / ٹرانسفر" value="${e?esc(e.desc):''}">
     <div class="seg"><button class="${(!e||e.in)?'on':''}" id="be_in_btn" onclick="setBankType('in')">جمع</button><button class="${(e&&e.out)?'on':''}" id="be_out_btn" onclick="setBankType('out')">نکلوائی</button></div>
     <input type="hidden" id="be_type" value="${(e&&e.out)?'out':'in'}">
     <label>رقم</label><input type="number" id="be_amt" value="${e?(e.in||e.out):''}">
     <label>تاریخ</label><input type="date" id="be_date" value="${e?e.date:todayStr()}">
+    <label>رسید کی تصویر (اختیاری)</label>
+    <div id="be_photo_wrap">${bePhotoWrapHtml()}</div>
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveBankEntry('${bankId}','${entryId||''}')">محفوظ کریں</button>
   `;
   openSheet(entryId?'انٹری میں ترمیم':'نئی بینک انٹری', body);
+}
+function bePhotoWrapHtml(){
+  return bePhoto
+    ? `<img src="${bePhoto}" style="max-width:140px;border-radius:10px;display:block;margin-bottom:8px;">
+       <button type="button" class="btn btn-outline btn-sm" onclick="bePhoto=null; document.getElementById('be_photo_wrap').innerHTML=bePhotoWrapHtml();">🗑️ تصویر ہٹائیں</button>`
+    : `<input type="file" accept="image/*" capture="environment" id="bePhotoInputCam" style="display:none;" onchange="captureBePhoto(this)">
+       <input type="file" accept="image/*" id="bePhotoInputGal" style="display:none;" onchange="captureBePhoto(this)">
+       <div class="btn-row">
+         <button type="button" class="btn btn-outline" style="flex:1;" onclick="document.getElementById('bePhotoInputCam').click()">📷 کیمرہ</button>
+         <button type="button" class="btn btn-outline" style="flex:1;" onclick="document.getElementById('bePhotoInputGal').click()">🖼️ گیلری</button>
+       </div>`;
+}
+function captureBePhoto(input){
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      const maxW=700; const scale=Math.min(1,maxW/img.width);
+      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+      bePhoto=cv.toDataURL('image/jpeg',0.6);
+      const wrap=document.getElementById('be_photo_wrap'); if(wrap) wrap.innerHTML=bePhotoWrapHtml();
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 function setBankType(t){
   document.getElementById('be_type').value=t;
@@ -1621,10 +1769,11 @@ async function saveBankEntry(bankId,entryId){
   const date=document.getElementById('be_date').value||todayStr();
   if(entryId){
     const e=DB.bankEntries.find(x=>x.id===entryId);
-    if(e){ e.desc=desc; e.date=date; e.in=type==='in'?amt:0; e.out=type==='out'?amt:0; }
+    if(e){ e.desc=desc; e.date=date; e.in=type==='in'?amt:0; e.out=type==='out'?amt:0; e.photo=bePhoto||null; }
   } else {
-    DB.bankEntries.push({id:uid(), createdAt:Date.now(), bankId, desc, date, in:type==='in'?amt:0, out:type==='out'?amt:0});
+    DB.bankEntries.push({id:uid(), createdAt:Date.now(), bankId, desc, date, in:type==='in'?amt:0, out:type==='out'?amt:0, photo:bePhoto||null});
   }
+  bePhoto=null;
   await saveDB(); closeSheet(); openBankDetail(bankId); toast('محفوظ ہو گیا');
   } finally { unlockSubmit(); }
 }
@@ -1673,6 +1822,9 @@ async function saveSettings(){
 function openSettings(){ go('more'); moreView='settings'; render(); }
 
 /* ===================== SHEET / OVERLAY ===================== */
+function viewPhoto(src){
+  openSheet('تصویر', `<img src="${src}" style="max-width:100%;border-radius:10px;">`);
+}
 function openSheet(title, bodyHTML){
   const root=document.getElementById('overlayRoot');
   root.innerHTML = `
@@ -1781,6 +1933,20 @@ function esc(s){ if(s===undefined||s===null) return ''; return String(s).replace
 
 /* ===================== PIN LOCK ===================== */
 const UNLOCK_KEY='kaleem_unlocked_v1';
+let hiddenAt=0;
+document.addEventListener('visibilitychange', function(){
+  if(document.hidden){ hiddenAt=Date.now(); }
+  else if(hiddenAt && DB && DB.shop && DB.shop.pin){
+    // Re-require the PIN if the app was backgrounded for more than ~15 seconds,
+    // so leaving/switching apps or locking the screen re-locks it.
+    if(Date.now()-hiddenAt > 15000){
+      sessionStorage.removeItem(UNLOCK_KEY);
+      lockMode='enter'; lockEntered=''; lockErr='';
+      renderLockScreen();
+    }
+    hiddenAt=0;
+  }
+});
 let lockEntered='';
 let lockMode='enter'; // 'enter' | 'setNew' | 'confirmNew' | 'changeOld'
 let lockTempPin='';
