@@ -613,13 +613,18 @@ function capturePOSBillPhoto(input){
 }
 function cartHTML(){
   if(!cart.length) return `<div class="empty"><div class="ic">🛒</div>ابھی کارٹ خالی ہے</div>`;
-  let rows = cart.map((c,idx)=>`
+  let rows = cart.map((c,idx)=>{
+    const it = c.itemId ? itemById(c.itemId) : null;
+    const photo = it && it.photo ? it.photo : null;
+    return `
     <div class="cartline">
+      ${photo?`<img src="${photo}" style="width:34px;height:34px;object-fit:cover;border-radius:7px;margin-inline-end:6px;">`:''}
       <div class="ci-name">${esc(c.name)}<br><span style="color:var(--muted);font-size:11.5px;">@${money(c.price)}</span></div>
       <input class="ci-qty" type="number" step="0.01" value="${c.qty}" onchange="updateCartQty(${idx},this.value)">
       <div class="ci-total">${money(c.qty*c.price)}</div>
       <button class="rm" onclick="removeFromCart(${idx})">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   const subtotal = cart.reduce((a,c)=>a+c.qty*c.price,0);
   return rows + `<div class="totalsbox"><div class="tr"><span>سب ٹوٹل</span><span>${money(subtotal)}</span></div></div>`;
 }
@@ -988,6 +993,47 @@ function computeCustomerLedger(id){
   const totalReceived = txns.filter(t=>t.amt<0).reduce((s,t)=>s+Math.abs(t.amt),0);
   return { c, due, asc, totalGiven, totalReceived };
 }
+let custReportSearch='', custReportFrom='', custReportTo='';
+function openCustomerReport(id){
+  custReportSearch=''; custReportFrom=''; custReportTo='';
+  renderCustomerReport(id);
+}
+function renderCustomerReport(id){
+  const {c, asc} = computeCustomerLedger(id);
+  let filtered = asc.slice();
+  if(custReportFrom) filtered = filtered.filter(t=>t.date>=custReportFrom);
+  if(custReportTo) filtered = filtered.filter(t=>t.date<=custReportTo);
+  if(custReportSearch.trim()){
+    const q=custReportSearch.trim().toLowerCase();
+    filtered = filtered.filter(t=>t.desc.toLowerCase().includes(q));
+  }
+  const totalGiven = filtered.filter(t=>t.amt>0).reduce((s,t)=>s+t.amt,0);
+  const totalReceived = filtered.filter(t=>t.amt<0).reduce((s,t)=>s+Math.abs(t.amt),0);
+  const rows = filtered.slice().reverse().map(t=>`
+    <div class="list-item">
+      <div><div class="name">${esc(t.desc)}</div><div class="meta">${fmtDateTime(t.date,t.ts)} • بیلنس: ${money(t.balance)}</div></div>
+      <div style="font-weight:800;color:${t.amt<0?'var(--green)':'var(--red)'}">${t.amt<0?'ملے ':'دیے '}${money(Math.abs(t.amt))}</div>
+    </div>`).join('');
+  const body=`
+    <input type="text" placeholder="انٹریز تلاش کریں..." value="${esc(custReportSearch)}" oninput="custReportSearch=this.value; renderCustomerReport('${id}')">
+    <div class="grid2" style="margin-top:8px;">
+      <div><label>پہلی تاریخ</label><input type="date" value="${custReportFrom}" onchange="custReportFrom=this.value; renderCustomerReport('${id}')"></div>
+      <div><label>آخری تاریخ</label><input type="date" value="${custReportTo}" onchange="custReportTo=this.value; renderCustomerReport('${id}')"></div>
+    </div>
+    ${(custReportFrom||custReportTo)?`<button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="custReportFrom='';custReportTo='';renderCustomerReport('${id}')">تاریخ صاف کریں</button>`:''}
+    <div class="grid2" style="margin-top:10px;">
+      <div class="stat good"><div class="label">آپ کو ملے</div><div class="value" style="font-size:16px;">${money(totalReceived)}</div></div>
+      <div class="stat warn"><div class="label">آپ نے دیے</div><div class="value" style="font-size:16px;">${money(totalGiven)}</div></div>
+    </div>
+    <div class="meta" style="margin-top:6px;">انٹریاں: ${filtered.length}</div>
+    <div class="card" style="margin-top:10px;">${rows||'<div class="empty">کوئی انٹری نہیں ملی</div>'}</div>
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="btn btn-outline" onclick="printCustomerLedger('${id}')">🖨️ پرنٹ / PDF</button>
+      <button class="btn wa" onclick="waCustomerLedger('${id}')">📲 واٹس ایپ</button>
+    </div>
+  `;
+  openSheet('رپورٹ — '+c.name, body);
+}
 function openCustomerDetail(id){
   const {c, due, asc, totalGiven, totalReceived} = computeCustomerLedger(id);
   const desc = asc.slice().reverse();
@@ -1012,6 +1058,9 @@ function openCustomerDetail(id){
       <button class="btn wa" onclick="waReminder('${c.id}')">📲 یاد دہانی بھیجیں</button>
       <button class="btn btn-outline" onclick="openCollectionForm('${c.id}',null,'received')">💳 وصولی درج کریں</button>
       <button class="btn btn-outline" onclick="openCollectionForm('${c.id}',null,'given')">➖ رقم دیں (قرض)</button>
+    </div>
+    <div class="btn-row" style="margin-top:8px;">
+      <button class="btn btn-outline" onclick="openCustomerReport('${c.id}')">📊 مکمل رپورٹ (تاریخ فلٹر)</button>
     </div>
     <div class="btn-row" style="margin-top:8px;">
       <button class="btn btn-outline" onclick="printCustomerLedger('${c.id}')">🖨️ پرنٹ / PDF بنائیں</button>
@@ -1649,7 +1698,7 @@ async function saveBank(){
   await saveDB(); closeSheet(); renderBanks(document.getElementById('main')); toast('بینک شامل ہو گیا');
   } finally { unlockSubmit(); }
 }
-function openBankDetail(bankId){
+function computeBankLedger(bankId){
   const b=bankById(bankId);
   const entries=[];
   DB.bankEntries.filter(e=>e.bankId===bankId).forEach(e=>entries.push({date:e.date,desc:e.desc,in:e.in,out:e.out,createdAt:e.createdAt||0,kind:'bankEntry',id:e.id,photo:e.photo||null}));
@@ -1657,7 +1706,12 @@ function openBankDetail(bankId){
   DB.purchases.filter(p=>p.paymentType==='بینک'&&p.bankId===bankId).forEach(p=>entries.push({date:p.date,desc:'خریداری',in:0,out:p.total,createdAt:p.createdAt,kind:'purchase',id:p.id}));
   entries.sort((a,b)=>a.createdAt-b.createdAt);
   let bal=0;
-  const rows=entries.map(e=>{bal+=(Number(e.in)||0)-(Number(e.out)||0);
+  entries.forEach(e=>{ bal+=(Number(e.in)||0)-(Number(e.out)||0); e.balance=bal; });
+  return { b, entries };
+}
+function openBankDetail(bankId){
+  const {b, entries} = computeBankLedger(bankId);
+  const rows=entries.map(e=>{
     return `<div class="list-item"><div><div class="name">${esc(e.desc)}${e.photo?' 📎':''}</div><div class="meta">${fmtDateTime(e.date,e.createdAt)}</div></div>
     <div style="display:flex;align-items:center;gap:8px;">
     <div style="font-weight:800;color:${e.in?'var(--green)':'var(--red)'}">${e.in?'+':'-'}${money(e.in||e.out)}</div>
@@ -1671,11 +1725,80 @@ function openBankDetail(bankId){
     <div><div class="name">${esc(b.name)}</div><div class="meta">${esc(b.accountNo||'')}</div></div></div>
     <div class="stat good" style="margin-top:10px;"><div class="label">موجودہ بیلنس</div><div class="value">${money(bankBalance(bankId))}</div></div>
     <button class="btn btn-outline" style="margin-top:10px;" onclick="openBankEntryForm('${bankId}')">+ نئی انٹری (جمع/نکلوائی)</button>
+    <button class="btn btn-outline" style="margin-top:8px;" onclick="openBankReport('${bankId}')">📊 مکمل رپورٹ (تاریخ فلٹر)</button>
     <button class="btn btn-red" style="margin-top:8px;" onclick="deleteBank('${bankId}')">🗑️ یہ بینک اکاؤنٹ حذف کریں</button>
     <h3 style="margin-top:14px;color:var(--navy);font-size:14px;">تمام انٹریاں</h3>
     ${rows||'<div class="empty">کوئی انٹری نہیں</div>'}
   `;
   openSheet(b.name, body);
+}
+let bankReportSearch='', bankReportFrom='', bankReportTo='';
+function openBankReport(bankId){
+  bankReportSearch=''; bankReportFrom=''; bankReportTo='';
+  renderBankReport(bankId);
+}
+function renderBankReport(bankId){
+  const {b, entries} = computeBankLedger(bankId);
+  let filtered = entries.slice();
+  if(bankReportFrom) filtered = filtered.filter(e=>e.date>=bankReportFrom);
+  if(bankReportTo) filtered = filtered.filter(e=>e.date<=bankReportTo);
+  if(bankReportSearch.trim()){
+    const q=bankReportSearch.trim().toLowerCase();
+    filtered = filtered.filter(e=>e.desc.toLowerCase().includes(q));
+  }
+  const totalIn = filtered.reduce((s,e)=>s+(Number(e.in)||0),0);
+  const totalOut = filtered.reduce((s,e)=>s+(Number(e.out)||0),0);
+  const rows = filtered.slice().reverse().map(e=>`
+    <div class="list-item">
+      <div><div class="name">${esc(e.desc)}</div><div class="meta">${fmtDateTime(e.date,e.createdAt)} • بیلنس: ${money(e.balance)}</div></div>
+      <div style="font-weight:800;color:${e.in?'var(--green)':'var(--red)'}">${e.in?'+':'-'}${money(e.in||e.out)}</div>
+    </div>`).join('');
+  const body=`
+    <input type="text" placeholder="انٹریز تلاش کریں..." value="${esc(bankReportSearch)}" oninput="bankReportSearch=this.value; renderBankReport('${bankId}')">
+    <div class="grid2" style="margin-top:8px;">
+      <div><label>پہلی تاریخ</label><input type="date" value="${bankReportFrom}" onchange="bankReportFrom=this.value; renderBankReport('${bankId}')"></div>
+      <div><label>آخری تاریخ</label><input type="date" value="${bankReportTo}" onchange="bankReportTo=this.value; renderBankReport('${bankId}')"></div>
+    </div>
+    ${(bankReportFrom||bankReportTo)?`<button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="bankReportFrom='';bankReportTo='';renderBankReport('${bankId}')">تاریخ صاف کریں</button>`:''}
+    <div class="grid2" style="margin-top:10px;">
+      <div class="stat good"><div class="label">کل جمع</div><div class="value" style="font-size:16px;">${money(totalIn)}</div></div>
+      <div class="stat warn"><div class="label">کل نکلوائی</div><div class="value" style="font-size:16px;">${money(totalOut)}</div></div>
+    </div>
+    <div class="meta" style="margin-top:6px;">انٹریاں: ${filtered.length}</div>
+    <div class="card" style="margin-top:10px;">${rows||'<div class="empty">کوئی انٹری نہیں ملی</div>'}</div>
+    <button class="btn btn-outline" style="margin-top:10px;" onclick="printBankLedger('${bankId}')">🖨️ پرنٹ / PDF</button>
+  `;
+  openSheet('رپورٹ — '+b.name, body);
+}
+function printBankLedger(bankId){
+  const {b, entries} = computeBankLedger(bankId);
+  const rows = entries.slice().reverse().map(e=>`
+    <tr>
+      <td style="padding:6px;border-bottom:1px solid #ddd;">${fmtDateTime(e.date,e.createdAt)}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;">${esc(e.desc)}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;text-align:center;">${e.in?money(e.in):''}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;text-align:center;">${e.out?money(e.out):''}</td>
+      <td style="padding:6px;border-bottom:1px solid #ddd;text-align:center;">${money(e.balance)}</td>
+    </tr>`).join('');
+  const html = `
+    <div style="direction:rtl;font-family:inherit;padding:10px;">
+      <h2 style="margin:0;">${esc(DB.shop.name)}</h2>
+      <div style="font-size:12px;color:#555;">${esc(DB.shop.address||'')}</div>
+      <h3 style="margin-top:14px;">بینک اسٹیٹمنٹ — ${esc(b.name)}</h3>
+      <div style="font-size:13px;">${esc(b.accountNo||'')} • تاریخ: ${fmtDate(todayStr())}</div>
+      <table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;">
+        <thead><tr style="background:#f0ede6;">
+          <th style="padding:6px;">تاریخ</th><th style="padding:6px;">تفصیل</th>
+          <th style="padding:6px;">جمع</th><th style="padding:6px;">نکلوائی</th><th style="padding:6px;">بیلنس</th>
+        </tr></thead>
+        <tbody>${rows||'<tr><td colspan="5" style="padding:10px;text-align:center;">کوئی انٹری نہیں</td></tr>'}</tbody>
+      </table>
+      <div style="margin-top:14px;font-weight:800;font-size:15px;">موجودہ بیلنس: ${money(bankBalance(bankId))}</div>
+    </div>`;
+  document.getElementById('printArea').innerHTML = html;
+  document.getElementById('printArea').style.display='block';
+  window.print();
+  setTimeout(()=>{document.getElementById('printArea').style.display='none';},500);
 }
 async function deleteBank(bankId){
   const hasEntries = DB.bankEntries.some(e=>e.bankId===bankId) || DB.sales.some(s=>s.bankId===bankId) || DB.purchases.some(p=>p.bankId===bankId);
@@ -1862,8 +1985,9 @@ function customConfirm(message){
 /* ===================== BARCODE CAMERA SCANNER ===================== */
 let scannerCallback=null;
 let scannerBusy=false;
+let scanCandidateCode=null, scanCandidateCount=0;
 function openBarcodeScanner(callback){
-  scannerCallback=callback; scannerBusy=false;
+  scannerCallback=callback; scannerBusy=false; scanCandidateCode=null; scanCandidateCount=0;
   const root=document.getElementById('overlayRoot');
   root.innerHTML = `
     <div class="overlay" style="align-items:center;">
@@ -1916,6 +2040,14 @@ function onBarcodeDetected(result){
   if(scannerBusy) return;
   const code = result && result.codeResult ? result.codeResult.code : null;
   if(!code) return;
+  // Require the same code to be read 3 times in a row before accepting it —
+  // a single camera frame can misread a digit, this filters that out.
+  if(code===scanCandidateCode){
+    scanCandidateCount++;
+  } else {
+    scanCandidateCode=code; scanCandidateCount=1;
+  }
+  if(scanCandidateCount<3) return;
   scannerBusy=true;
   playBeep();
   if(navigator.vibrate) navigator.vibrate(120);
