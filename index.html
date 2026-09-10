@@ -1034,7 +1034,7 @@ function renderCustomerReport(id){
     </div>
     <div class="btn-row">
       <button class="btn wa" style="flex:1;" onclick="waReminder('${c.id}')">📲 ریمائنڈر</button>
-      <button class="btn btn-outline" style="flex:1;" onclick="waCustomerLedger('${c.id}')">📄 حساب بھیجیں</button>
+      <button class="btn btn-outline" style="flex:1;" onclick="printCustomerLedger('${c.id}')">📄 PDF بنا کر بھیجیں</button>
     </div>
     <input type="text" style="margin-top:10px;" placeholder="انٹریز تلاش کریں..." value="${esc(custReportSearch)}" oninput="custReportSearch=this.value; renderCustomerReport('${id}')">
     <div class="grid2" style="margin-top:8px;">
@@ -1083,8 +1083,7 @@ function openCustomerDetail(id){
       <button class="btn btn-outline" onclick="openCustomerReport('${c.id}')">📊 مکمل رپورٹ (تاریخ فلٹر)</button>
     </div>
     <div class="btn-row" style="margin-top:8px;">
-      <button class="btn btn-outline" onclick="printCustomerLedger('${c.id}')">🖨️ پرنٹ / PDF بنائیں</button>
-      <button class="btn wa" onclick="waCustomerLedger('${c.id}')">📲 حساب واٹس ایپ پر بھیجیں</button>
+      <button class="btn wa" onclick="printCustomerLedger('${c.id}')">📄 PDF بنا کر بھیجیں</button>
     </div>
     <h3 style="margin-top:16px;color:var(--navy);font-size:14px;">مکمل حساب</h3>
     ${rows}
@@ -1200,16 +1199,6 @@ async function printCustomerLedger(id){
   toast('PDF بن رہی ہے...');
   const result = await exportHtmlAsPdf(html, 'Customer_Ledger_'+c.name.replace(/\s+/g,'_')+'.pdf');
   if(result) await sharePdfBlob(result.blob, result.filename);
-}
-function waCustomerLedger(id){
-  const {c, due, asc, totalGiven, totalReceived} = computeCustomerLedger(id);
-  if(!c.phone){ toast('واٹس ایپ نمبر موجود نہیں'); return; }
-  let text = `*${DB.shop.name}*\nکسٹمر حساب: ${c.name}\n\n`;
-  asc.slice().reverse().slice(0,25).forEach(t=>{
-    text += `${fmtDateTime(t.date,t.ts)} — ${t.desc}: ${t.amt<0?'ملے '+money(Math.abs(t.amt)):'دیے '+money(t.amt)} (بیلنس ${money(t.balance)})\n`;
-  });
-  text += `\nکل آپ کو ملے: ${money(totalReceived)}\nکل آپ نے دیے: ${money(totalGiven)}\n*باقی رقم: ${money(due)}*`;
-  window.open(waLink(c.phone,text),'_blank');
 }
 function waReminder(id){
   const c=custById(id); const due=custDue(c);
