@@ -526,6 +526,7 @@ function renderPOS(main){
       <label>آئٹم شامل کریں</label>
       <input type="text" id="posItemSearch" placeholder="آئٹم کا نام یا بارکوڈ لکھیں..." autocomplete="off" oninput="filterPosItems(this.value)" onfocus="filterPosItems(this.value)">
       <div id="posItemResults" style="position:relative;"></div>
+      <div id="posPriceTypeWrap"></div>
       <div class="btn-row" style="margin-top:8px;">
         <input type="number" id="posQty" placeholder="مقدار" value="1" step="0.01" style="max-width:120px;">
         <button class="btn btn-navy" onclick="addToCart()">➕ کارٹ میں شامل کریں</button>
@@ -558,7 +559,11 @@ function renderPOS(main){
           ${DB.banks.map(b=>`<option value="${b.id}" ${posBankId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}
         </select>` : ''}
       <label>ڈسکاؤنٹ (روپے)</label>
-      <input type="number" id="posDiscount" value="${editingSaleDiscount||0}" step="0.01">
+      <input type="number" id="posDiscount" value="${editingSaleDiscount||0}" step="0.01" oninput="updateChangeDisplay()">
+      ${posPayType==='نقد' ? `
+      <label>کیش وصول کیا (روپے)</label>
+      <input type="number" id="posCashReceived" placeholder="مثلاً 5000" oninput="updateChangeDisplay()">
+      <div id="changeDisplay" class="meta" style="margin-top:4px;"></div>` : ''}
     </div>
 
     ${posPayType==='ادھار' ? `
@@ -639,7 +644,7 @@ function cartHTML(){
   return rows + `<div class="totalsbox"><div class="tr"><span>سب ٹوٹل</span><span>${money(subtotal)}</span></div></div>`;
 }
 function setPosQty(v){ document.getElementById('posQty').value=v; }
-let posSelectedItemId=null;
+let posSelectedItemId=null, posPriceType='retail';
 function filterPosItems(q){
   const box=document.getElementById('posItemResults');
   if(!box) return;
@@ -649,7 +654,7 @@ function filterPosItems(q){
   box.innerHTML = matches.length
     ? `<div style="position:absolute;left:0;right:0;top:2px;background:#fff;border:1.5px solid var(--line);border-radius:10px;z-index:20;max-height:260px;overflow-y:auto;box-shadow:0 4px 14px rgba(0,0,0,.12);">
         ${matches.map(i=>`<div class="list-item" style="padding:10px 12px;" onclick="selectPosItem('${i.id}')">
-          <div>${i.photo?`<img src="${i.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;margin-inline-end:8px;vertical-align:middle;">`:''}<span class="name">${esc(i.name)}</span><div class="meta">اسٹاک: ${i.stock} • قیمت: ${money(i.salePrice)}</div></div>
+          <div>${i.photo?`<img src="${i.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;margin-inline-end:8px;vertical-align:middle;">`:''}<span class="name">${esc(i.name)}</span><div class="meta">اسٹاک: ${i.stock} • قیمت: ${money(i.salePrice)}${i.wholesalePrice?' • ہول سیل: '+money(i.wholesalePrice):''}</div></div>
         </div>`).join('')}
        </div>`
     : `<div style="position:absolute;left:0;right:0;top:2px;background:#fff;border:1.5px solid var(--line);border-radius:10px;z-index:20;padding:10px;color:var(--muted);">کوئی آئٹم نہیں ملا</div>`;
@@ -657,10 +662,23 @@ function filterPosItems(q){
 function selectPosItem(id){
   const it=itemById(id);
   if(!it) return;
-  posSelectedItemId=id;
+  posSelectedItemId=id; posPriceType='retail';
   const inp=document.getElementById('posItemSearch'); if(inp) inp.value=it.name;
   const box=document.getElementById('posItemResults'); if(box) box.innerHTML='';
+  renderPosPriceType();
 }
+function renderPosPriceType(){
+  const wrap=document.getElementById('posPriceTypeWrap');
+  if(!wrap) return;
+  const it=itemById(posSelectedItemId);
+  if(!it || !it.wholesalePrice){ wrap.innerHTML=''; return; }
+  wrap.innerHTML = `
+    <div class="seg" style="margin-top:6px;">
+      <button class="${posPriceType==='retail'?'on':''}" onclick="setPosPriceType('retail')">خوردہ (${money(it.salePrice)})</button>
+      <button class="${posPriceType==='wholesale'?'on':''}" onclick="setPosPriceType('wholesale')">ہول سیل (${money(it.wholesalePrice)})</button>
+    </div>`;
+}
+function setPosPriceType(t){ posPriceType=t; renderPosPriceType(); }
 async function addToCart(){
   const qty=parseFloat(document.getElementById('posQty').value)||0;
   if(!posSelectedItemId){ toast('پہلے آئٹم منتخب کریں'); return; }
@@ -668,17 +686,34 @@ async function addToCart(){
   const it=itemById(posSelectedItemId);
   if(!it){ toast('پہلے آئٹم منتخب کریں'); return; }
   if(qty>Number(it.stock)){ if(!(await customConfirm('اسٹاک سے زیادہ مقدار ہے، پھر بھی جاری رکھیں؟'))) return; }
-  const existing=cart.find(c=>c.itemId===it.id);
+  const price = (posPriceType==='wholesale' && it.wholesalePrice) ? Number(it.wholesalePrice) : Number(it.salePrice);
+  const existing=cart.find(c=>c.itemId===it.id && c.price===price);
   if(existing) existing.qty=Number(existing.qty)+qty;
-  else cart.push({itemId:it.id,name:it.name,price:Number(it.salePrice),qty});
-  posSelectedItemId=null;
+  else cart.push({itemId:it.id,name:it.name+(posPriceType==='wholesale'&&it.wholesalePrice?' (ہول سیل)':''),price,qty});
+  posSelectedItemId=null; posPriceType='retail';
   const inp=document.getElementById('posItemSearch'); if(inp) inp.value='';
   document.getElementById('posQty').value=1;
+  const wrap=document.getElementById('posPriceTypeWrap'); if(wrap) wrap.innerHTML='';
   document.getElementById('cartBox').innerHTML=cartHTML();
+  updateChangeDisplay();
 }
-function updateCartQty(idx,val){ cart[idx].qty=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); }
-function removeFromCart(idx){ cart.splice(idx,1); document.getElementById('cartBox').innerHTML=cartHTML(); }
+function updateCartQty(idx,val){ cart[idx].qty=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
+function removeFromCart(idx){ cart.splice(idx,1); document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function setPayType(t){ posPayType=t; renderPOS(document.getElementById('main')); }
+function updateChangeDisplay(){
+  const box=document.getElementById('changeDisplay');
+  if(!box) return;
+  const subtotal = cart.reduce((a,c)=>a+c.qty*c.price,0);
+  const discount = parseFloat(document.getElementById('posDiscount').value)||0;
+  const netTotal = subtotal-discount;
+  const receivedInp=document.getElementById('posCashReceived');
+  const received = receivedInp ? (parseFloat(receivedInp.value)||0) : 0;
+  if(!received){ box.innerHTML=''; return; }
+  const change = received-netTotal;
+  box.innerHTML = change>=0
+    ? `واپس کرنا ہے: <b style="color:var(--green);">${money(change)}</b>`
+    : `کم وصول ہوا: <b style="color:var(--red);">${money(Math.abs(change))}</b>`;
+}
 function scanPOSItem(){
   openBarcodeScanner(code=>{
     const it=DB.items.find(i=>(i.barcode||'').trim()===code.trim());
@@ -688,6 +723,7 @@ function scanPOSItem(){
     else cart.push({itemId:it.id,name:it.name,price:Number(it.salePrice),qty:1});
     const box=document.getElementById('cartBox');
     if(box) box.innerHTML=cartHTML();
+    updateChangeDisplay();
     toast('✅ '+it.name+' کارٹ میں شامل ہو گیا');
   });
 }
@@ -861,8 +897,11 @@ function openItemForm(id,prefillBarcode){
     <label>کیٹیگری</label><input type="text" id="f_cat" value="${esc(it.category||'')}">
     <div class="grid2">
       <div><label>خریداری قیمت</label><input type="number" id="f_cost" value="${it.costPrice}"></div>
-      <div><label>فروخت قیمت</label><input type="number" id="f_sale" value="${it.salePrice}"></div>
+      <div><label>فروخت قیمت (خوردہ)</label><input type="number" id="f_sale" value="${it.salePrice}"></div>
     </div>
+    <label>ہول سیل قیمت (اختیاری)</label>
+    <input type="number" id="f_wholesale" value="${it.wholesalePrice||''}" placeholder="مثلاً کم قیمت بلک آرڈر کے لیے">
+    <div class="meta" style="margin-top:2px;">بھری ہو تو سیل کرتے وقت خوردہ/ہول سیل میں سے چننے کا آپشن ملے گا۔</div>
     <div class="grid2">
       <div><label>موجودہ اسٹاک (پیس)</label><input type="number" step="0.01" id="f_stock" value="${it.stock}"></div>
       <div><label>ری آرڈر لیول</label><input type="number" id="f_reorder" value="${it.reorderLevel}"></div>
@@ -914,6 +953,7 @@ async function saveItem(id){
     category:document.getElementById('f_cat').value.trim(),
     costPrice:parseFloat(document.getElementById('f_cost').value)||0,
     salePrice:parseFloat(document.getElementById('f_sale').value)||0,
+    wholesalePrice:parseFloat(document.getElementById('f_wholesale').value)||0,
     stock:parseFloat(document.getElementById('f_stock').value)||0,
     reorderLevel:parseFloat(document.getElementById('f_reorder').value)||0,
     piecesPerCarton:parseFloat(document.getElementById('f_pieces_per_carton').value)||0,
