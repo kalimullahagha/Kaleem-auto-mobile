@@ -242,6 +242,7 @@
 </div>
 
 <div id="overlayRoot"></div>
+<div id="scannerRoot"></div>
 <div id="confirmRoot"></div>
 <div id="printArea" style="display:none"></div>
 
@@ -2299,7 +2300,7 @@ let scannerBusy=false;
 let scanCandidateCode=null, scanCandidateCount=0;
 function openBarcodeScanner(callback){
   scannerCallback=callback; scannerBusy=false; scanCandidateCode=null; scanCandidateCount=0;
-  const root=document.getElementById('overlayRoot');
+  const root=document.getElementById('scannerRoot');
   root.innerHTML = `
     <div class="overlay" style="align-items:center;">
       <div class="sheet" style="max-height:82vh;padding:14px;">
@@ -2368,7 +2369,7 @@ function onBarcodeDetected(result){
 }
 function closeScanner(){
   try{ if(typeof Quagga!=='undefined'){ Quagga.offDetected(); Quagga.stop(); } }catch(e){}
-  const root=document.getElementById('overlayRoot');
+  const root=document.getElementById('scannerRoot');
   if(root) root.innerHTML='';
   scannerCallback=null;
 }
