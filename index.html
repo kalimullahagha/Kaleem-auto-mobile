@@ -2358,7 +2358,7 @@ function onBarcodeDetected(result){
   } else {
     scanCandidateCode=code; scanCandidateCount=1;
   }
-  if(scanCandidateCount<3) return;
+  if(scanCandidateCount<2) return;
   scannerBusy=true;
   playBeep();
   if(navigator.vibrate) navigator.vibrate(120);
