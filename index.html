@@ -564,6 +564,12 @@ function renderPOS(main){
       ${posPayType==='نقد' ? `
       <label>کیش وصول کیا (روپے)</label>
       <input type="number" id="posCashReceived" placeholder="مثلاً 5000" oninput="updateChangeDisplay()">
+      <div class="btn-row" style="margin-top:6px;gap:6px;">
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setCashReceived(100)">100</button>
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setCashReceived(500)">500</button>
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setCashReceived(1000)">1000</button>
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setCashReceived(5000)">5000</button>
+      </div>
       <div id="changeDisplay" class="meta" style="margin-top:4px;"></div>` : ''}
     </div>
 
@@ -655,7 +661,7 @@ function filterPosItems(q){
   box.innerHTML = matches.length
     ? `<div style="position:absolute;left:0;right:0;top:2px;background:#fff;border:1.5px solid var(--line);border-radius:10px;z-index:20;max-height:260px;overflow-y:auto;box-shadow:0 4px 14px rgba(0,0,0,.12);">
         ${matches.map(i=>`<div class="list-item" style="padding:10px 12px;" onclick="selectPosItem('${i.id}')">
-          <div>${i.photo?`<img src="${i.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;margin-inline-end:8px;vertical-align:middle;">`:''}<span class="name">${esc(i.name)}</span><div class="meta">اسٹاک: ${i.stock} • قیمت: ${money(i.salePrice)}${i.wholesalePrice?' • ہول سیل: '+money(i.wholesalePrice):''}</div></div>
+          <div>${i.photo?`<img src="${i.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;margin-inline-end:8px;vertical-align:middle;">`:''}<span class="name">${esc(i.name)}</span><div class="meta">اسٹاک: ${stockLabel(i)} • قیمت: ${money(i.salePrice)}${i.wholesalePrice?' • ہول سیل: '+money(i.wholesalePrice):''}</div></div>
         </div>`).join('')}
        </div>`
     : `<div style="position:absolute;left:0;right:0;top:2px;background:#fff;border:1.5px solid var(--line);border-radius:10px;z-index:20;padding:10px;color:var(--muted);">کوئی آئٹم نہیں ملا</div>`;
@@ -672,14 +678,31 @@ function renderPosPriceType(){
   const wrap=document.getElementById('posPriceTypeWrap');
   if(!wrap) return;
   const it=itemById(posSelectedItemId);
-  if(!it || !it.wholesalePrice){ wrap.innerHTML=''; return; }
-  wrap.innerHTML = `
+  if(!it){ wrap.innerHTML=''; return; }
+  const defaultPrice = (posPriceType==='wholesale' && it.wholesalePrice) ? Number(it.wholesalePrice) : Number(it.salePrice);
+  let html='';
+  if(it.wholesalePrice){
+    html += `
     <div class="seg" style="margin-top:6px;">
       <button class="${posPriceType==='retail'?'on':''}" onclick="setPosPriceType('retail')">خوردہ (${money(it.salePrice)})</button>
       <button class="${posPriceType==='wholesale'?'on':''}" onclick="setPosPriceType('wholesale')">ہول سیل (${money(it.wholesalePrice)})</button>
     </div>`;
+  }
+  if(it.piecesPerCarton>0){
+    html += `
+    <label style="margin-top:8px;">یا کارٹن کی تعداد لکھیں (فی کارٹن ${it.piecesPerCarton} پیس)</label>
+    <input type="number" step="1" id="posCartons" placeholder="مثلاً 2" oninput="applyPosCartonQty(${it.piecesPerCarton})">`;
+  }
+  html += `
+    <label style="margin-top:8px;">ریٹ فی پیس — چاہیں تو خود بدل دیں</label>
+    <input type="number" id="posManualRate" value="${defaultPrice}">`;
+  wrap.innerHTML=html;
 }
 function setPosPriceType(t){ posPriceType=t; renderPosPriceType(); }
+function applyPosCartonQty(piecesPerCarton){
+  const cartons=parseFloat(document.getElementById('posCartons').value)||0;
+  document.getElementById('posQty').value = cartons*piecesPerCarton;
+}
 async function addToCart(){
   const qty=parseFloat(document.getElementById('posQty').value)||0;
   if(!posSelectedItemId){ toast('پہلے آئٹم منتخب کریں'); return; }
@@ -687,7 +710,9 @@ async function addToCart(){
   const it=itemById(posSelectedItemId);
   if(!it){ toast('پہلے آئٹم منتخب کریں'); return; }
   if(qty>Number(it.stock)){ if(!(await customConfirm('اسٹاک سے زیادہ مقدار ہے، پھر بھی جاری رکھیں؟'))) return; }
-  const price = (posPriceType==='wholesale' && it.wholesalePrice) ? Number(it.wholesalePrice) : Number(it.salePrice);
+  const defaultPrice = (posPriceType==='wholesale' && it.wholesalePrice) ? Number(it.wholesalePrice) : Number(it.salePrice);
+  const rateInp=document.getElementById('posManualRate');
+  const price = (rateInp && rateInp.value!=='') ? (parseFloat(rateInp.value)||0) : defaultPrice;
   const existing=cart.find(c=>c.itemId===it.id && c.price===price);
   if(existing) existing.qty=Number(existing.qty)+qty;
   else cart.push({itemId:it.id,name:it.name+(posPriceType==='wholesale'&&it.wholesalePrice?' (ہول سیل)':''),price,qty});
@@ -701,6 +726,7 @@ async function addToCart(){
 function updateCartQty(idx,val){ cart[idx].qty=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function removeFromCart(idx){ cart.splice(idx,1); document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function setPayType(t){ posPayType=t; renderPOS(document.getElementById('main')); }
+function setCashReceived(v){ const inp=document.getElementById('posCashReceived'); if(inp){ inp.value=v; updateChangeDisplay(); } }
 function updateChangeDisplay(){
   const box=document.getElementById('changeDisplay');
   if(!box) return;
@@ -860,6 +886,15 @@ function waSendInvoice(saleId){
 }
 
 /* ===================== STOCK ===================== */
+function stockLabel(i){
+  const st=Number(i.stock)||0;
+  if(i.piecesPerCarton>0){
+    const cartons=Math.floor(st/i.piecesPerCarton);
+    const rest=st - cartons*i.piecesPerCarton;
+    return `${st} پیس (${cartons} کارٹن${rest?' + '+rest+' پیس':''})`;
+  }
+  return `${st}`;
+}
 let stockSearch='';
 function renderStock(main){
   const filtered = DB.items.filter(i=> i.name.toLowerCase().includes(stockSearch.toLowerCase()) || (i.barcode||'').includes(stockSearch));
@@ -874,7 +909,7 @@ function renderStock(main){
         return `<div class="list-item" onclick="openItemForm('${i.id}')">
           <div style="display:flex;align-items:center;gap:10px;">
             ${i.photo?`<img src="${i.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;">`:`<div style="width:44px;height:44px;border-radius:8px;background:#f0ede6;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">📦</div>`}
-            <div><div class="name">${esc(i.name)}</div><div class="meta">فروخت قیمت: ${money(i.salePrice)} • اسٹاک: ${i.stock}</div></div>
+            <div><div class="name">${esc(i.name)}</div><div class="meta">فروخت قیمت: ${money(i.salePrice)} • اسٹاک: ${stockLabel(i)}</div></div>
           </div>
           <span class="badge ${low?'low':'ok'}">${low?'⚠️ کم':'ٹھیک'}</span>
         </div>`;
