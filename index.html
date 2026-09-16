@@ -103,6 +103,16 @@
   .seg{display:flex;background:#f1ede4;border-radius:12px;padding:4px;gap:4px;}
   .seg button{flex:1;padding:10px 6px;border:none;background:transparent;border-radius:9px;font-weight:700;font-size:13.5px;color:var(--muted);cursor:pointer;}
   .seg button.on{background:var(--navy);color:#fff;}
+  .cattabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch;}
+  .cattabs::-webkit-scrollbar{display:none;}
+  .cattab{flex:0 0 auto;padding:8px 14px;border-radius:20px;border:1.5px solid var(--line);background:#fff;color:var(--navy);font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;}
+  .cattab.on{background:var(--navy);color:#fff;border-color:var(--navy);}
+  .prodgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+  .prodcard{background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:6px;text-align:center;cursor:pointer;}
+  .prodcard.sel{border-color:var(--navy);box-shadow:0 0 0 2px rgba(18,42,67,.15);}
+  .prodcard .ph{width:100%;aspect-ratio:1/1;border-radius:9px;object-fit:cover;background:#f1ede4;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--muted);margin-bottom:5px;}
+  .prodcard .pn{font-size:11.5px;font-weight:700;color:var(--navy);line-height:1.25;max-height:28px;overflow:hidden;}
+  .prodcard .pp{font-size:11px;color:var(--muted);margin-top:2px;font-weight:700;}
 
   .list-item{display:flex;align-items:center;justify-content:space-between;padding:12px 4px;border-bottom:1px solid var(--line);}
   .list-item:last-child{border-bottom:none;}
@@ -569,6 +579,8 @@ function renderPOS(main){
       <label>آئٹم شامل کریں</label>
       <input type="text" id="posItemSearch" placeholder="آئٹم کا نام یا بارکوڈ لکھیں..." autocomplete="off" oninput="filterPosItems(this.value)" onfocus="filterPosItems(this.value)">
       <div id="posItemResults" style="position:relative;"></div>
+      <div id="posCatTabs" class="cattabs" style="margin-top:10px;"></div>
+      <div id="posGrid" class="prodgrid" style="margin-top:8px;"></div>
       <div id="posPriceTypeWrap"></div>
       <div class="btn-row" style="margin-top:8px;">
         <input type="number" id="posQty" placeholder="مقدار" value="1" step="0.01" style="max-width:120px;">
@@ -637,6 +649,30 @@ function renderPOS(main){
     <button class="btn btn-primary" style="margin-top:4px;" onclick="finalizeSale()">${editingSaleId?'✅ ترمیم محفوظ کریں':'✅ سیل مکمل کریں اور بل بنائیں'}</button>
   `;
   if(posPayType==='ادھار') initSignaturePad();
+  renderPosCatTabs();
+  renderPosGrid();
+}
+let posGridCategory='سب';
+function renderPosCatTabs(){
+  const box=document.getElementById('posCatTabs');
+  if(!box) return;
+  const cats=['سب', ...new Set(DB.items.map(i=>(i.category||'').trim()).filter(Boolean))];
+  if(!cats.includes(posGridCategory)) posGridCategory='سب';
+  box.innerHTML = cats.map(c=>`<button class="cattab ${posGridCategory===c?'on':''}" onclick="setPosGridCategory('${esc(c).replace(/'/g,"\\'")}')">${esc(c)}</button>`).join('');
+}
+function setPosGridCategory(c){ posGridCategory=c; renderPosCatTabs(); renderPosGrid(); }
+function renderPosGrid(){
+  const box=document.getElementById('posGrid');
+  if(!box) return;
+  let items = DB.items;
+  if(posGridCategory && posGridCategory!=='سب') items = items.filter(i=>(i.category||'').trim()===posGridCategory);
+  if(!items.length){ box.innerHTML=`<div class="empty" style="grid-column:1/-1;"><div class="ic">📦</div>اس کیٹیگری میں کوئی آئٹم نہیں</div>`; return; }
+  box.innerHTML = items.map(i=>`
+    <div class="prodcard ${posSelectedItemId===i.id?'sel':''}" onclick="selectPosItem('${i.id}')">
+      ${i.photo?`<img class="ph" src="${i.photo}">`:`<div class="ph">📦</div>`}
+      <div class="pn">${esc(i.name)}</div>
+      <div class="pp">${money(i.salePrice)}</div>
+    </div>`).join('');
 }
 function initSignaturePad(){
   const canvas=document.getElementById('sigPad');
@@ -715,6 +751,8 @@ function selectPosItem(id){
   const inp=document.getElementById('posItemSearch'); if(inp) inp.value=it.name;
   const box=document.getElementById('posItemResults'); if(box) box.innerHTML='';
   renderPosPriceType();
+  renderPosGrid();
+  const wrap=document.getElementById('posPriceTypeWrap'); if(wrap) wrap.scrollIntoView({behavior:'smooth',block:'center'});
 }
 function renderPosPriceType(){
   const wrap=document.getElementById('posPriceTypeWrap');
@@ -764,6 +802,7 @@ async function addToCart(){
   const wrap=document.getElementById('posPriceTypeWrap'); if(wrap) wrap.innerHTML='';
   document.getElementById('cartBox').innerHTML=cartHTML();
   updateChangeDisplay();
+  renderPosGrid();
 }
 function updateCartQty(idx,val){ cart[idx].qty=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function removeFromCart(idx){ cart.splice(idx,1); document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
