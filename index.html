@@ -108,7 +108,8 @@
   .cattab{flex:0 0 auto;padding:8px 14px;border-radius:20px;border:1.5px solid var(--line);background:#fff;color:var(--navy);font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;}
   .cattab.on{background:var(--navy);color:#fff;border-color:var(--navy);}
   .prodgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
-  .prodcard{background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:6px;text-align:center;cursor:pointer;}
+  .prodcard{background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:6px;text-align:center;cursor:pointer;position:relative;}
+  .prodcard .qtybadge{position:absolute;top:-6px;left:-6px;background:var(--green);color:#fff;font-size:11px;font-weight:800;min-width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;padding:0 4px;box-shadow:0 1px 4px rgba(0,0,0,.25);}
   .prodcard.sel{border-color:var(--navy);box-shadow:0 0 0 2px rgba(18,42,67,.15);}
   .prodcard .ph{width:100%;aspect-ratio:1/1;border-radius:9px;object-fit:cover;background:#f1ede4;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--muted);margin-bottom:5px;}
   .prodcard .pn{font-size:11.5px;font-weight:700;color:var(--navy);line-height:1.25;max-height:28px;overflow:hidden;}
@@ -461,6 +462,16 @@ function waLink(phone,text){
   if(!p.startsWith('92') && p.length===10) p='92'+p;
   return 'https://wa.me/'+p+'?text='+encodeURIComponent(text);
 }
+function shopCardText(){
+  return `🏪 ${DB.shop.name}`+(DB.shop.address?`\n📍 ${DB.shop.address}`:'')+(DB.shop.phone?`\n📞 ${DB.shop.phone}`:'');
+}
+async function shareShopCard(){
+  const text=shopCardText();
+  if(navigator.share){
+    try{ await navigator.share({title:DB.shop.name, text}); return; }catch(e){ if(e && e.name==='AbortError') return; }
+  }
+  window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank');
+}
 function itemById(id){ return DB.items.find(i=>i.id===id); }
 function custById(id){ return DB.customers.find(c=>c.id===id); }
 function bankById(id){ return DB.banks.find(b=>b.id===id); }
@@ -673,18 +684,35 @@ function renderPosCatTabs(){
   box.innerHTML = cats.map(c=>`<button class="cattab ${posGridCategory===c?'on':''}" onclick="setPosGridCategory('${esc(c).replace(/'/g,"\\'")}')">${esc(c)}</button>`).join('');
 }
 function setPosGridCategory(c){ posGridCategory=c; renderPosCatTabs(); renderPosGrid(); }
+function cartQtyForItem(id){ return cart.filter(c=>c.itemId===id).reduce((a,c)=>a+(Number(c.qty)||0),0); }
 function renderPosGrid(){
   const box=document.getElementById('posGrid');
   if(!box) return;
   let items = DB.items;
   if(posGridCategory && posGridCategory!=='سب') items = items.filter(i=>(i.category||'').trim()===posGridCategory);
   if(!items.length){ box.innerHTML=`<div class="empty" style="grid-column:1/-1;"><div class="ic">📦</div>اس کیٹیگری میں کوئی آئٹم نہیں</div>`; return; }
-  box.innerHTML = items.map(i=>`
-    <div class="prodcard ${posSelectedItemId===i.id?'sel':''}" onclick="selectPosItem('${i.id}')">
+  box.innerHTML = items.map(i=>{
+    const q=cartQtyForItem(i.id);
+    return `
+    <div class="prodcard" onclick="quickAddFromGrid('${i.id}')">
+      ${q>0?`<div class="qtybadge">${q}</div>`:''}
       ${i.photo?`<img class="ph" src="${i.photo}">`:`<div class="ph">📦</div>`}
       <div class="pn">${esc(i.name)}</div>
-      <div class="pp">${money(i.salePrice)}</div>
-    </div>`).join('');
+      <div class="pp">${money((posWholesaleMode && i.wholesalePrice)?i.wholesalePrice:i.salePrice)}</div>
+    </div>`;
+  }).join('');
+}
+function quickAddFromGrid(id){
+  const it=itemById(id);
+  if(!it) return;
+  const price = (posWholesaleMode && it.wholesalePrice) ? Number(it.wholesalePrice) : Number(it.salePrice);
+  const label = it.name + (posWholesaleMode && it.wholesalePrice ? ' (ہول سیل)' : '');
+  const existing = cart.find(c=>c.itemId===it.id && c.price===price);
+  if(existing) existing.qty = Number(existing.qty)+1;
+  else cart.push({itemId:it.id, name:label, price, qty:1});
+  document.getElementById('cartBox').innerHTML=cartHTML();
+  updateChangeDisplay();
+  renderPosGrid();
 }
 function initSignaturePad(){
   const canvas=document.getElementById('sigPad');
@@ -954,6 +982,7 @@ function showInvoice(sale){
       <button class="btn btn-outline" onclick="printInvoice('${sale.id}')">🖨️ پرنٹ</button>
       <button class="btn wa" onclick="waSendInvoice('${sale.id}')">📲 واٹس ایپ</button>
     </div>
+    <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="shareShopCard()">🪪 دکان کا کارڈ شیئر کریں</button>
     <div class="btn-row" style="margin-top:8px;">
       <button class="btn btn-outline" onclick="editSale('${sale.id}')">✏️ بل میں ترمیم کریں</button>
       <button class="btn btn-red" onclick="deleteSaleFromInvoice('${sale.id}')">🗑️ بل حذف کریں</button>
@@ -2790,6 +2819,16 @@ function renderSettings(main){
       <label>پتہ</label><input type="text" id="s_addr" value="${esc(DB.shop.address)}">
       <label>فون نمبر</label><input type="tel" id="s_phone" value="${esc(DB.shop.phone||'')}">
       <button class="btn btn-primary" style="margin-top:14px;" onclick="saveSettings()">محفوظ کریں</button>
+    </div>
+    <div class="card">
+      <h3>🪪 دکان کا کارڈ</h3>
+      <div class="meta" style="margin-bottom:10px;">یہ کارڈ کسی کے ساتھ بھی واٹس ایپ یا کسی اور ایپ سے شیئر کیا جا سکتا ہے۔</div>
+      <div class="invoice-preview" style="padding:12px;">
+        <div style="font-weight:800;color:var(--navy);font-size:15px;">🏪 ${esc(DB.shop.name)}</div>
+        ${DB.shop.address?`<div style="font-size:12.5px;color:var(--muted);margin-top:3px;">📍 ${esc(DB.shop.address)}</div>`:''}
+        ${DB.shop.phone?`<div style="font-size:12.5px;color:var(--muted);margin-top:3px;">📞 ${esc(DB.shop.phone)}</div>`:''}
+      </div>
+      <button class="btn wa" style="margin-top:10px;" onclick="shareShopCard()">📲 دکان کا کارڈ شیئر کریں</button>
     </div>
     <div class="card">
       <h3>🛡️ ڈیٹا کی حفاظت (بیک اپ)</h3>
