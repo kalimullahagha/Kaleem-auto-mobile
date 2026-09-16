@@ -113,6 +113,14 @@
   .prodcard .ph{width:100%;aspect-ratio:1/1;border-radius:9px;object-fit:cover;background:#f1ede4;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--muted);margin-bottom:5px;}
   .prodcard .pn{font-size:11.5px;font-weight:700;color:var(--navy);line-height:1.25;max-height:28px;overflow:hidden;}
   .prodcard .pp{font-size:11px;color:var(--muted);margin-top:2px;font-weight:700;}
+  .wsmode{display:flex;align-items:center;justify-content:space-between;background:#fff4e8;border:1.5px solid #f0c36d;border-radius:12px;padding:10px 12px;margin-bottom:10px;}
+  .wsmode .wl{display:flex;align-items:center;gap:8px;font-weight:800;color:#a45c00;font-size:14px;}
+  .swtch{position:relative;display:inline-block;width:46px;height:26px;flex:none;}
+  .swtch input{opacity:0;width:0;height:0;}
+  .swtch .sl{position:absolute;cursor:pointer;inset:0;background:#d8d2c4;border-radius:26px;transition:.2s;}
+  .swtch .sl:before{content:"";position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3);}
+  .swtch input:checked + .sl{background:var(--green);}
+  .swtch input:checked + .sl:before{transform:translateX(20px);}
 
   .list-item{display:flex;align-items:center;justify-content:space-between;padding:12px 4px;border-bottom:1px solid var(--line);}
   .list-item:last-child{border-bottom:none;}
@@ -577,6 +585,10 @@ function renderPOS(main){
 
     <div class="card">
       <label>آئٹم شامل کریں</label>
+      <div class="wsmode">
+        <span class="wl">🛍️ ہول سیل موڈ</span>
+        <label class="swtch"><input type="checkbox" id="posWsToggle" ${posWholesaleMode?'checked':''} onchange="setWholesaleMode(this.checked)"><span class="sl"></span></label>
+      </div>
       <input type="text" id="posItemSearch" placeholder="آئٹم کا نام یا بارکوڈ لکھیں..." autocomplete="off" oninput="filterPosItems(this.value)" onfocus="filterPosItems(this.value)">
       <div id="posItemResults" style="position:relative;"></div>
       <div id="posCatTabs" class="cattabs" style="margin-top:10px;"></div>
@@ -729,7 +741,7 @@ function cartHTML(){
   return rows + `<div class="totalsbox"><div class="tr"><span>سب ٹوٹل</span><span>${money(subtotal)}</span></div></div>`;
 }
 function setPosQty(v){ document.getElementById('posQty').value=v; }
-let posSelectedItemId=null, posPriceType='retail';
+let posSelectedItemId=null, posPriceType='retail', posWholesaleMode=false;
 function filterPosItems(q){
   const box=document.getElementById('posItemResults');
   if(!box) return;
@@ -747,7 +759,7 @@ function filterPosItems(q){
 function selectPosItem(id){
   const it=itemById(id);
   if(!it) return;
-  posSelectedItemId=id; posPriceType='retail';
+  posSelectedItemId=id; posPriceType=(posWholesaleMode && it.wholesalePrice) ? 'wholesale' : 'retail';
   const inp=document.getElementById('posItemSearch'); if(inp) inp.value=it.name;
   const box=document.getElementById('posItemResults'); if(box) box.innerHTML='';
   renderPosPriceType();
@@ -779,6 +791,15 @@ function renderPosPriceType(){
   wrap.innerHTML=html;
 }
 function setPosPriceType(t){ posPriceType=t; renderPosPriceType(); }
+function setWholesaleMode(v){
+  posWholesaleMode=v;
+  toast(v?'ہول سیل موڈ آن — اب آئٹمز خود بخود ہول سیل قیمت پر آئیں گے':'ہول سیل موڈ آف — خوردہ قیمت پر واپس');
+  if(posSelectedItemId){
+    const it=itemById(posSelectedItemId);
+    if(it) posPriceType = (v && it.wholesalePrice) ? 'wholesale' : 'retail';
+    renderPosPriceType();
+  }
+}
 function applyPosCartonQty(piecesPerCarton){
   const cartons=parseFloat(document.getElementById('posCartons').value)||0;
   document.getElementById('posQty').value = cartons*piecesPerCarton;
