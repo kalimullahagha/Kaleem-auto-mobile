@@ -1981,6 +1981,9 @@ function pickerListHTML(){
   const q=(pPickerSearch||'').trim().toLowerCase();
   const list = DB.items.filter(i=> !q || i.name.toLowerCase().includes(q) || (i.barcode||'').includes(q));
   let html='';
+  if(pCart.length){
+    html += `<div class="totalsbox" id="pickGrandTotalBox"><div class="tr"><span>کل رقم</span><span id="pickGrandTotal">${money(pCartTotal())}</span></div></div>`;
+  }
   if(pPickerAddingNew){
     html += `
     <div class="pur-item-row">
@@ -2008,6 +2011,7 @@ function pickerListHTML(){
         <input type="number" step="0.01" placeholder="مقدار" value="${sel.qty||''}" oninput="updatePickQty('${i.id}',this.value)">
         <input type="number" placeholder="قیمت (فی پیس)" value="${sel.cost||''}" oninput="updatePickCost('${i.id}',this.value)">
       </div>
+      <div class="meta" id="pickTotal_${i.id}" style="margin-top:4px;font-weight:700;color:var(--navy);">ٹوٹل: ${money((Number(sel.qty)||0)*(Number(sel.cost)||0))}</div>
       ${i.piecesPerCarton>0?`<input type="number" step="1" placeholder="یا کارٹن کی تعداد (فی کارٹن ${i.piecesPerCarton})" style="margin-top:6px;" oninput="updatePickCartons('${i.id}',this.value,${i.piecesPerCarton})">`:''}
       <input type="text" placeholder="تفصیل (اختیاری)" value="${esc(sel.detail||'')}" style="margin-top:6px;" oninput="updatePickDetail('${i.id}',this.value)">
       `:''}
@@ -2036,8 +2040,15 @@ function togglePickItem(id){
   else{ const it=itemById(id); if(it) pCart.push({itemId:id, name:it.name, qty:1, cost:Number(it.costPrice)||0, detail:''}); }
   filterPickerList();
 }
-function updatePickQty(id,v){ const c=pCart.find(c=>c.itemId===id); if(c) c.qty=parseFloat(v)||0; }
-function updatePickCost(id,v){ const c=pCart.find(c=>c.itemId===id); if(c) c.cost=parseFloat(v)||0; }
+function updatePickQty(id,v){ const c=pCart.find(c=>c.itemId===id); if(c) c.qty=parseFloat(v)||0; refreshPickCalc(id); }
+function updatePickCost(id,v){ const c=pCart.find(c=>c.itemId===id); if(c) c.cost=parseFloat(v)||0; refreshPickCalc(id); }
+function refreshPickCalc(id){
+  const c=pCart.find(x=>x.itemId===id);
+  const el=document.getElementById('pickTotal_'+id);
+  if(el && c) el.innerText='ٹوٹل: '+money((Number(c.qty)||0)*(Number(c.cost)||0));
+  const g=document.getElementById('pickGrandTotal');
+  if(g) g.innerText=money(pCartTotal());
+}
 function updatePickCartons(id,v,ppc){ const c=pCart.find(c=>c.itemId===id); if(c){ c.qty=(parseFloat(v)||0)*ppc; filterPickerList(); } }
 function updatePickDetail(id,v){ const c=pCart.find(c=>c.itemId===id); if(c) c.detail=v; }
 
