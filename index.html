@@ -763,7 +763,7 @@ function cartHTML(){
     return `
     <div class="cartline">
       ${photo?`<img src="${photo}" style="width:34px;height:34px;object-fit:cover;border-radius:7px;margin-inline-end:6px;">`:''}
-      <div class="ci-name">${esc(c.name)}<br><span style="color:var(--muted);font-size:11.5px;">@${money(c.price)}</span></div>
+      <div class="ci-name">${esc(c.name)}<br><span style="color:var(--muted);font-size:11.5px;">@<input type="number" value="${c.price}" style="width:70px;padding:2px 4px;font-size:11.5px;border:1px solid var(--line);border-radius:5px;" onclick="event.stopPropagation()" onchange="updateCartPrice(${idx},this.value)"></span></div>
       <input class="ci-qty" type="number" step="0.01" value="${c.qty}" onchange="updateCartQty(${idx},this.value)">
       <div class="ci-total">${money(c.qty*c.price)}</div>
       <button class="rm" onclick="removeFromCart(${idx})">✕</button>
@@ -858,6 +858,7 @@ async function addToCart(){
   renderPosGrid();
 }
 function updateCartQty(idx,val){ cart[idx].qty=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
+function updateCartPrice(idx,val){ cart[idx].price=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function removeFromCart(idx){ cart.splice(idx,1); document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function setPayType(t){ posPayType=t; renderPOS(document.getElementById('main')); }
 function setCashReceived(v){ const inp=document.getElementById('posCashReceived'); if(inp){ inp.value=(Number(inp.value)||0)+v; updateChangeDisplay(); } }
