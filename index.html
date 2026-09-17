@@ -646,6 +646,7 @@ function renderPOS(main){
         <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setCashReceived(500)">500</button>
         <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setCashReceived(1000)">1000</button>
         <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setCashReceived(5000)">5000</button>
+        <button class="btn btn-outline btn-sm" style="flex:0.6;" onclick="document.getElementById('posCashReceived').value=0; updateChangeDisplay();">صاف</button>
       </div>
       <div id="changeDisplay" class="meta" style="margin-top:4px;"></div>` : ''}
     </div>
@@ -856,7 +857,7 @@ async function addToCart(){
 function updateCartQty(idx,val){ cart[idx].qty=parseFloat(val)||0; document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function removeFromCart(idx){ cart.splice(idx,1); document.getElementById('cartBox').innerHTML=cartHTML(); updateChangeDisplay(); }
 function setPayType(t){ posPayType=t; renderPOS(document.getElementById('main')); }
-function setCashReceived(v){ const inp=document.getElementById('posCashReceived'); if(inp){ inp.value=v; updateChangeDisplay(); } }
+function setCashReceived(v){ const inp=document.getElementById('posCashReceived'); if(inp){ inp.value=(Number(inp.value)||0)+v; updateChangeDisplay(); } }
 function updateChangeDisplay(){
   const box=document.getElementById('changeDisplay');
   if(!box) return;
@@ -1205,7 +1206,8 @@ function computeCustomerLedger(id){
   DB.sales.filter(s=>s.customerId===id).forEach(s=>txns.push({date:s.date,ts:s.createdAt||0,desc:s.invoiceNo+' — '+s.paymentType,amt:s.netTotal,type:'sale',id:s.id}));
   DB.collections.filter(x=>x.customerId===id).forEach(x=>{
     const isGiven = x.type==='given';
-    txns.push({date:x.date,ts:x.createdAt||0,desc:(isGiven?'رقم دی':'وصولی')+(x.notes?' — '+x.notes:''),amt:isGiven?x.amount:-x.amount,type:'col',id:x.id});
+    const payTag = x.paymentType ? ' ('+x.paymentType+(x.paymentType==='بینک'&&x.bankId?' — '+(bankById(x.bankId)?bankById(x.bankId).name:''):'')+')' : '';
+    txns.push({date:x.date,ts:x.createdAt||0,desc:(isGiven?'رقم دی':'وصولی')+payTag+(x.notes?' — '+x.notes:''),amt:isGiven?x.amount:-x.amount,type:'col',id:x.id});
   });
   const asc = txns.slice().sort((a,b)=> a.date>b.date?1 : a.date<b.date?-1 : (a.ts-b.ts));
   let running = c.openingDue||0;
@@ -1417,10 +1419,21 @@ function waReminder(id){
 function openCollectionForm(custId,colId,defaultType){
   const c = colId ? DB.collections.find(x=>x.id===colId) : null;
   const type = c ? (c.type||'received') : (defaultType||'received');
+  const pay = c ? (c.paymentType||'نقد') : 'نقد';
   const body=`
     <input type="hidden" id="col_type" value="${type}">
     <label>رقم</label><input type="number" id="col_amt" value="${c?c.amount:''}">
     <label>تاریخ</label><input type="date" id="col_date" value="${c?c.date:todayStr()}">
+    <label>${type==='given'?'رقم کہاں سے دی':'رقم کہاں وصول ہوئی'}</label>
+    <select id="col_pay" onchange="document.getElementById('col_bankwrap').style.display=this.value==='بینک'?'block':'none';">
+      <option value="نقد" ${pay==='نقد'?'selected':''}>💵 نقد (کیش)</option>
+      <option value="بینک" ${pay==='بینک'?'selected':''}>🏦 بینک</option>
+    </select>
+    <div id="col_bankwrap" style="display:${pay==='بینک'?'block':'none'};">
+      <label>بینک اکاؤنٹ</label>
+      <select id="col_bank">${DB.banks.map(b=>`<option value="${b.id}" ${c&&c.bankId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>
+      ${!DB.banks.length?'<div class="meta">پہلے بینک اکاؤنٹس میں جا کر ایک اکاؤنٹ شامل کریں</div>':''}
+    </div>
     <label>نوٹس</label><input type="text" id="col_notes" value="${c?esc(c.notes||''):''}">
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCollection('${custId}','${colId||''}')">محفوظ کریں</button>
   `;
@@ -1434,11 +1447,14 @@ async function saveCollection(custId,colId){
   const date=document.getElementById('col_date').value||todayStr();
   const notes=document.getElementById('col_notes').value.trim();
   const type=document.getElementById('col_type').value||'received';
+  const paymentType=document.getElementById('col_pay').value||'نقد';
+  const bankId=paymentType==='بینک' ? (document.getElementById('col_bank').value||null) : null;
+  if(paymentType==='بینک' && !bankId){ toast('پہلے بینک اکاؤنٹ شامل کریں'); return; }
   if(colId){
     const c=DB.collections.find(x=>x.id===colId);
-    if(c){ c.amount=amount; c.date=date; c.notes=notes; c.type=type; }
+    if(c){ c.amount=amount; c.date=date; c.notes=notes; c.type=type; c.paymentType=paymentType; c.bankId=bankId; }
   } else {
-    DB.collections.push({id:uid(), createdAt:Date.now(), customerId:custId, amount, date, notes, type});
+    DB.collections.push({id:uid(), createdAt:Date.now(), customerId:custId, amount, date, notes, type, paymentType, bankId});
   }
   await saveDB(); closeSheet(); openCustomerDetail(custId); toast('وصولی محفوظ ہو گئی');
   } finally { unlockSubmit(); }
@@ -1581,7 +1597,7 @@ function openAmanatDetail(id){
     return `<div class="list-item">
       <div style="flex:1;cursor:pointer;" onclick="openAmanatEntryForm('${id}','${e.id}')">
         <div class="name">${esc(e.notes||(e.type==='in'?'امانت رکھی':'واپس کی'))}${e.photo?' 📎':''}${e.signature?' ✍️':''}</div>
-        <div class="meta">${fmtDateTime(e.date,e.createdAt)} • بیلنس: ${money(running)}</div>
+        <div class="meta">${fmtDateTime(e.date,e.createdAt)} • بیلنس: ${money(running)}${e.paymentType?' • '+e.paymentType+(e.paymentType==='بینک'&&e.bankId&&bankById(e.bankId)?' — '+bankById(e.bankId).name:''):''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="font-weight:800;color:${e.type==='in'?'var(--red)':'var(--green)'}">${e.type==='in'?'+':'-'}${money(e.amount)}</div>
@@ -1608,6 +1624,7 @@ let amPhoto=null, amSignature=null;
 function openAmanatEntryForm(personId,entryId,defaultType){
   const e = entryId ? DB.amanatEntries.find(x=>x.id===entryId) : null;
   const type = e ? e.type : (defaultType||'in');
+  const pay = e ? (e.paymentType||'نقد') : 'نقد';
   amPhoto = e ? (e.photo||null) : null;
   amSignature = e ? (e.signature||null) : null;
   const body=`
@@ -1615,6 +1632,16 @@ function openAmanatEntryForm(personId,entryId,defaultType){
     <input type="hidden" id="am_type" value="${type}">
     <label>رقم</label><input type="number" id="am_amt" value="${e?e.amount:''}">
     <label>تاریخ</label><input type="date" id="am_date" value="${e?e.date:todayStr()}">
+    <label>نقد یا بینک؟</label>
+    <select id="am_pay" onchange="document.getElementById('am_bankwrap').style.display=this.value==='بینک'?'block':'none';">
+      <option value="نقد" ${pay==='نقد'?'selected':''}>💵 نقد (کیش)</option>
+      <option value="بینک" ${pay==='بینک'?'selected':''}>🏦 بینک</option>
+    </select>
+    <div id="am_bankwrap" style="display:${pay==='بینک'?'block':'none'};">
+      <label>بینک اکاؤنٹ</label>
+      <select id="am_bank">${DB.banks.map(b=>`<option value="${b.id}" ${e&&e.bankId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>
+      ${!DB.banks.length?'<div class="meta">پہلے بینک اکاؤنٹس میں جا کر ایک اکاؤنٹ شامل کریں</div>':''}
+    </div>
     <label>نوٹس (اختیاری)</label><input type="text" id="am_notes" value="${e?esc(e.notes||''):''}">
     <label>رسید کی تصویر (اختیاری)</label>
     <div id="am_photo_wrap">${amPhotoWrapHtml()}</div>
@@ -1687,11 +1714,14 @@ async function saveAmanatEntry(personId,entryId){
   const type=document.getElementById('am_type').value;
   const date=document.getElementById('am_date').value||todayStr();
   const notes=document.getElementById('am_notes').value.trim();
+  const paymentType=document.getElementById('am_pay').value||'نقد';
+  const bankId=paymentType==='بینک' ? (document.getElementById('am_bank').value||null) : null;
+  if(paymentType==='بینک' && !bankId){ toast('پہلے بینک اکاؤنٹ شامل کریں'); return; }
   if(entryId){
     const e=DB.amanatEntries.find(x=>x.id===entryId);
-    if(e){ e.amount=amount; e.type=type; e.date=date; e.notes=notes; e.photo=amPhoto||null; e.signature=amSignature||null; }
+    if(e){ e.amount=amount; e.type=type; e.date=date; e.notes=notes; e.photo=amPhoto||null; e.signature=amSignature||null; e.paymentType=paymentType; e.bankId=bankId; }
   } else {
-    DB.amanatEntries.push({id:uid(), createdAt:Date.now(), personId, amount, type, date, notes, photo:amPhoto||null, signature:amSignature||null});
+    DB.amanatEntries.push({id:uid(), createdAt:Date.now(), personId, amount, type, date, notes, photo:amPhoto||null, signature:amSignature||null, paymentType, bankId});
   }
   amPhoto=null; amSignature=null;
   await saveDB(); closeSheet(); openAmanatDetail(personId); toast('محفوظ ہو گیا');
@@ -2391,6 +2421,14 @@ function computeCashLedger(){
   DB.cashEntries.forEach(e=>entries.push({date:e.date,desc:e.desc,in:e.in,out:e.out,createdAt:e.createdAt||0,kind:'cash',id:e.id,signature:e.signature||null}));
   DB.sales.filter(s=>s.paymentType==='نقد').forEach(s=>entries.push({date:s.date,desc:'POS سیل — '+s.invoiceNo,in:s.netTotal,out:0,createdAt:s.createdAt,kind:'sale',id:s.id}));
   DB.purchases.filter(p=>p.paymentType==='نقد').forEach(p=>entries.push({date:p.date,desc:'خریداری — '+(p.supplier||''),in:0,out:p.total,createdAt:p.createdAt,kind:'purchase',id:p.id}));
+  DB.collections.filter(x=>x.paymentType==='نقد').forEach(x=>{
+    const c=custById(x.customerId);
+    entries.push({date:x.date,desc:(x.type==='given'?'کسٹمر کو رقم دی — ':'کسٹمر سے وصولی — ')+(c?c.name:''),in:x.type==='given'?0:x.amount,out:x.type==='given'?x.amount:0,createdAt:x.createdAt||0,kind:'collection',id:x.id});
+  });
+  DB.amanatEntries.filter(x=>x.paymentType==='نقد').forEach(x=>{
+    const p=DB.amanatPersons.find(a=>a.id===x.personId);
+    entries.push({date:x.date,desc:(x.type==='in'?'امانت رکھی — ':'امانت واپس کی — ')+(p?p.name:''),in:x.type==='in'?x.amount:0,out:x.type==='in'?0:x.amount,createdAt:x.createdAt||0,kind:'amanat',id:x.id});
+  });
   entries.sort((a,b)=>a.createdAt-b.createdAt);
   let bal=0;
   entries.forEach(e=>{ bal+=(Number(e.in)||0)-(Number(e.out)||0); e.balance=bal; });
@@ -2622,6 +2660,14 @@ function computeBankLedger(bankId){
   DB.bankEntries.filter(e=>e.bankId===bankId).forEach(e=>entries.push({date:e.date,desc:e.desc,in:e.in,out:e.out,createdAt:e.createdAt||0,kind:'bankEntry',id:e.id,photo:e.photo||null}));
   DB.sales.filter(s=>s.paymentType==='بینک'&&s.bankId===bankId).forEach(s=>entries.push({date:s.date,desc:'POS سیل — '+s.invoiceNo,in:s.netTotal,out:0,createdAt:s.createdAt,kind:'sale',id:s.id}));
   DB.purchases.filter(p=>p.paymentType==='بینک'&&p.bankId===bankId).forEach(p=>entries.push({date:p.date,desc:'خریداری',in:0,out:p.total,createdAt:p.createdAt,kind:'purchase',id:p.id}));
+  DB.collections.filter(x=>x.paymentType==='بینک'&&x.bankId===bankId).forEach(x=>{
+    const c=custById(x.customerId);
+    entries.push({date:x.date,desc:(x.type==='given'?'کسٹمر کو رقم دی — ':'کسٹمر سے وصولی — ')+(c?c.name:''),in:x.type==='given'?0:x.amount,out:x.type==='given'?x.amount:0,createdAt:x.createdAt||0,kind:'collection',id:x.id});
+  });
+  DB.amanatEntries.filter(x=>x.paymentType==='بینک'&&x.bankId===bankId).forEach(x=>{
+    const p=DB.amanatPersons.find(a=>a.id===x.personId);
+    entries.push({date:x.date,desc:(x.type==='in'?'امانت رکھی — ':'امانت واپس کی — ')+(p?p.name:''),in:x.type==='in'?x.amount:0,out:x.type==='in'?0:x.amount,createdAt:x.createdAt||0,kind:'amanat',id:x.id});
+  });
   entries.sort((a,b)=>a.createdAt-b.createdAt);
   let bal=0;
   entries.forEach(e=>{ bal+=(Number(e.in)||0)-(Number(e.out)||0); e.balance=bal; });
