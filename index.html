@@ -559,7 +559,10 @@ function renderDash(main){
     ${lowStock.length? `<div class="card"><h3>⚠️ کم اسٹاک آئٹمز</h3>${lowStock.map(i=>`
       <div class="list-item"><div><div class="name">${esc(i.name)}</div><div class="meta">باقی: ${i.stock}</div></div><span class="badge low">دوبارہ منگوائیں</span></div>`).join('')}</div>`:''}
     <div class="card">
-      <h3>🕓 حالیہ سیلز</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h3 style="margin:0;">🕓 حالیہ سیلز</h3>
+        <span style="color:var(--navy);font-weight:700;font-size:12.5px;cursor:pointer;" onclick="goAllSales()">سب دیکھیں ›</span>
+      </div>
       ${recentSalesHTML()}
     </div>
     <div class="btn-row" style="margin-top:4px;">
@@ -1508,10 +1511,13 @@ async function confirmDeleteCollection(colId,custId){
 /* ===================== MORE (Purchases / Cash / Banks) ===================== */
 let moreView='menu';
 let amanatSearch='';
+let allSalesSearch='', allSalesFrom='', allSalesTo='';
+function goAllSales(){ moreView='allSales'; go('more'); }
 function renderMore(main){
   if(moreView==='menu'){
     main.innerHTML=`
       <div class="card">
+        <div class="list-item" onclick="moreView='allSales';render()"><div class="name">🧾 تمام سیلز (پرانے بل)</div><span>›</span></div>
         <div class="list-item" onclick="moreView='purchases';render()"><div class="name">📥 خریداری (سپلائر سے مال)</div><span>›</span></div>
         <div class="list-item" onclick="moreView='cash';render()"><div class="name">💵 کیش بک</div><span>›</span></div>
         <div class="list-item" onclick="moreView='banks';render()"><div class="name">🏦 بینک اکاؤنٹس</div><span>›</span></div>
@@ -1523,6 +1529,7 @@ function renderMore(main){
     `;
     return;
   }
+  if(moreView==='allSales') return renderAllSales(main);
   if(moreView==='purchases') return renderPurchases(main);
   if(moreView==='cash') return renderCash(main);
   if(moreView==='banks') return renderBanks(main);
@@ -1532,6 +1539,34 @@ function renderMore(main){
   if(moreView==='settings') return renderSettings(main);
 }
 function backToMoreMenu(){ moreView='menu'; render(); }
+function renderAllSales(main){
+  let list=[...DB.sales].sort((a,b)=>b.createdAt-a.createdAt);
+  const q=(allSalesSearch||'').trim().toLowerCase();
+  if(q) list=list.filter(s=>{ const c=custById(s.customerId); const cname=c?c.name:'واک اِن گاہک'; return s.invoiceNo.toLowerCase().includes(q) || cname.toLowerCase().includes(q); });
+  if(allSalesFrom) list=list.filter(s=>s.date>=allSalesFrom);
+  if(allSalesTo) list=list.filter(s=>s.date<=allSalesTo);
+  const total=list.reduce((s,x)=>s+(Number(x.netTotal)||0),0);
+  main.innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="backToMoreMenu()">‹ واپس</button>
+    <div class="card" style="margin-top:10px;">
+      <label>تلاش کریں (بل نمبر یا کسٹمر کا نام)</label>
+      <input type="text" value="${esc(allSalesSearch||'')}" placeholder="مثلاً INV-0057 یا کسٹمر کا نام" oninput="allSalesSearch=this.value; renderAllSales(document.getElementById('main'))">
+      <div class="grid2" style="margin-top:8px;">
+        <div><label>تاریخ سے</label><input type="date" value="${allSalesFrom||''}" onchange="allSalesFrom=this.value; renderAllSales(document.getElementById('main'))"></div>
+        <div><label>تاریخ تک</label><input type="date" value="${allSalesTo||''}" onchange="allSalesTo=this.value; renderAllSales(document.getElementById('main'))"></div>
+      </div>
+      ${(allSalesFrom||allSalesTo||allSalesSearch)?`<button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="allSalesSearch='';allSalesFrom='';allSalesTo=''; renderAllSales(document.getElementById('main'))">فلٹر صاف کریں</button>`:''}
+    </div>
+    <div class="stat" style="margin-top:10px;"><div class="label">کل (${list.length} بل)</div><div class="value">${money(total)}</div></div>
+    <div class="card" style="margin-top:10px;">
+      ${list.length ? list.map(s=>{
+        const c=custById(s.customerId);
+        return `<div class="list-item" onclick="showInvoice(DB.sales.find(x=>x.id==='${s.id}'))" style="cursor:pointer;"><div><div class="name">${esc(c?c.name:'واک اِن گاہک')} — ${s.invoiceNo}</div>
+        <div class="meta">${fmtDateTime(s.date,s.createdAt)} • ${s.paymentType}</div></div><div style="font-weight:800;">${money(s.netTotal)}</div></div>`;
+      }).join('') : `<div class="empty"><div class="ic">🧾</div>کوئی بل نہیں ملا</div>`}
+    </div>
+  `;
+}
 
 /* ===================== AMANAT (Trust Deposits) ===================== */
 function amanatBalance(personId){
