@@ -2996,6 +2996,10 @@ function openBarcodeScanner(callback){
         <div class="sheethead"><h2>📷 بار کوڈ اسکین کریں</h2><button class="closebtn" onclick="closeScanner()">✕</button></div>
         <div id="scannerViewport"><div class="scan-line"></div></div>
         <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:8px;">بارکوڈ کو کیمرے کے سامنے رکھیں</div>
+        <div style="display:flex;gap:6px;margin-top:10px;">
+          <input type="text" id="scanManualInput" placeholder="یا بارکوڈ نمبر ہاتھ سے لکھیں" style="flex:1;">
+          <button class="btn btn-primary btn-sm" onclick="submitManualScan()">شامل کریں</button>
+        </div>
         <button class="btn btn-outline" style="margin-top:10px;" onclick="closeScanner()">منسوخ کریں</button>
       </div>
     </div>`;
@@ -3012,11 +3016,12 @@ function openBarcodeScanner(callback){
       name:"Live",
       type:"LiveStream",
       target: document.getElementById('scannerViewport'),
-      constraints:{ facingMode:"environment", width:{ideal:640}, height:{ideal:480} }
+      constraints:{ facingMode:"environment", width:{ideal:1280}, height:{ideal:720} },
+      area:{ top:"30%", right:"5%", left:"5%", bottom:"30%" }
     },
     locator:{ patchSize:"medium", halfSample:true },
     numOfWorkers: 2,
-    decoder:{ readers:["ean_reader","ean_8_reader","code_128_reader","code_39_reader","upc_reader","upc_e_reader"] },
+    decoder:{ readers:["ean_reader","ean_8_reader","code_128_reader","upc_reader"] },
     locate:true
   }, function(err){
     if(err){ console.error(err); toast('کیمرہ کھولنے میں مسئلہ — پرمیشن چیک کریں'); closeScanner(); return; }
@@ -3024,6 +3029,14 @@ function openBarcodeScanner(callback){
   });
   Quagga.offDetected();
   Quagga.onDetected(onBarcodeDetected);
+}
+function submitManualScan(){
+  const inp=document.getElementById('scanManualInput');
+  const code=(inp?inp.value:'').trim();
+  if(!code){ toast('بارکوڈ نمبر لکھیں'); return; }
+  const cb=scannerCallback;
+  closeScanner();
+  if(cb) cb(code);
 }
 function playBeep(){
   try{
@@ -3037,10 +3050,21 @@ function playBeep(){
     setTimeout(()=>ctx.close(), 300);
   }catch(e){}
 }
+function isValidEAN(code){
+  if(!/^\d+$/.test(code)) return true; // non-numeric codes (code128 etc.) skip checksum check
+  if(code.length!==13 && code.length!==8) return true; // only EAN-13/EAN-8 have this checksum shape
+  const digits=code.split('').map(Number);
+  const check=digits.pop();
+  let sum=0;
+  digits.reverse().forEach((d,i)=>{ sum += d * (i%2===0?3:1); });
+  const calc=(10-(sum%10))%10;
+  return calc===check;
+}
 function onBarcodeDetected(result){
   if(scannerBusy) return;
   const code = result && result.codeResult ? result.codeResult.code : null;
   if(!code) return;
+  if(!isValidEAN(code)) return; // checksum failed — almost certainly a misread, ignore this frame
   // Require the same code to be read 3 times in a row before accepting it —
   // a single camera frame can misread a digit, this filters that out.
   if(code===scanCandidateCode){
@@ -3048,7 +3072,7 @@ function onBarcodeDetected(result){
   } else {
     scanCandidateCode=code; scanCandidateCount=1;
   }
-  if(scanCandidateCount<2) return;
+  if(scanCandidateCount<3) return;
   scannerBusy=true;
   playBeep();
   if(navigator.vibrate) navigator.vibrate(120);
