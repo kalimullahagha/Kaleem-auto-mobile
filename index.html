@@ -2666,7 +2666,7 @@ function renderBanks(main){
     <div class="card">
       ${DB.banks.length? DB.banks.map(b=>`<div class="list-item" onclick="openBankDetail('${b.id}')">
         <div class="flexrow"><div class="bank-avatar" style="background:${bankMonogramBg(b.name)}">${esc((b.name||'؟').trim()[0]||'؟')}</div>
-        <div><div class="name">${esc(b.name)}</div><div class="meta">${esc(b.accountNo||'')}</div></div></div>
+        <div><div class="name">${esc(b.name)}</div><div class="meta">${esc(b.accountNo||'')}${b.accountHolder?' • '+esc(b.accountHolder):''}</div></div></div>
         <div style="font-weight:800;">${money(bankBalance(b.id))}</div></div>`).join('')
         : `<div class="empty">ابھی کوئی بینک شامل نہیں</div>`}
     </div>
@@ -2681,6 +2681,7 @@ function openBankForm(prefillName){
       <button type="button" class="btn btn-outline btn-sm" style="width:auto;" onclick="openBankNamePicker()">📋 لسٹ سے چنیں</button>
     </div>
     <label>اکاؤنٹ نمبر</label><input type="text" id="b_acc">
+    <label>اکاؤنٹ ہولڈر کا نام (اختیاری)</label><input type="text" id="b_holder" placeholder="مثلاً جس کے نام پر جیز کیش/بینک اکاؤنٹ ہے">
     <label>برانچ</label><input type="text" id="b_branch">
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveBank()">محفوظ کریں</button>
   `;
@@ -2711,7 +2712,7 @@ async function saveBank(){
   try{
   const name=document.getElementById('b_name').value.trim();
   if(!name){ toast('بینک کا نام لکھیں'); return; }
-  DB.banks.push({id:uid(), name, accountNo:document.getElementById('b_acc').value.trim(), branch:document.getElementById('b_branch').value.trim()});
+  DB.banks.push({id:uid(), name, accountNo:document.getElementById('b_acc').value.trim(), accountHolder:document.getElementById('b_holder').value.trim(), branch:document.getElementById('b_branch').value.trim()});
   await saveDB(); closeSheet(); renderBanks(document.getElementById('main')); toast('بینک شامل ہو گیا');
   } finally { unlockSubmit(); }
 }
@@ -2747,7 +2748,7 @@ function openBankDetail(bankId){
   }).reverse().join('');
   const body=`
     <div class="flexrow" style="margin-bottom:4px;"><div class="bank-avatar" style="background:${bankMonogramBg(b.name)}">${esc((b.name||'؟').trim()[0]||'؟')}</div>
-    <div><div class="name">${esc(b.name)}</div><div class="meta">${esc(b.accountNo||'')}</div></div></div>
+    <div><div class="name">${esc(b.name)}</div><div class="meta">${esc(b.accountNo||'')}${b.accountHolder?' • '+esc(b.accountHolder):''}</div></div></div>
     <div class="stat good" style="margin-top:10px;"><div class="label">موجودہ بیلنس</div><div class="value">${money(bankBalance(bankId))}</div></div>
     <button class="btn btn-outline" style="margin-top:10px;" onclick="openBankEntryForm('${bankId}')">+ نئی انٹری (جمع/نکلوائی)</button>
     <button class="btn btn-outline" style="margin-top:8px;" onclick="openBankReport('${bankId}')">📊 مکمل رپورٹ (تاریخ فلٹر)</button>
