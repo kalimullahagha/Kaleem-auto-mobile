@@ -2672,14 +2672,39 @@ function renderBanks(main){
     </div>
   `;
 }
-function openBankForm(){
+const COMMON_BANKS=["JazzCash","EasyPaisa","Upaisa","Alfa Pay","Allied Bank Limited (ABL)","Askari Bank (AKBL)","Bank Alfalah Limited (BAF)","Bank Al Habib (BAHL)","Bank Islami Pakistan","Bank of Punjab (BOP)","Faysal Bank Limited (FBL)","Habib Bank Limited (HBL)","Habib Metropolitan Bank","JS Bank","Meezan Bank (MEZ)","Muslim Commercial Bank (MCB)","National Bank of Pakistan (NBP)","Samba Bank","Silk Bank","Soneri Bank","Standard Chartered Bank","Summit Bank","United Bank Limited (UBL)"];
+function openBankForm(prefillName){
   const body=`
-    <label>بینک کا نام</label><input type="text" id="b_name">
+    <label>بینک کا نام</label>
+    <div style="display:flex;gap:6px;">
+      <input type="text" id="b_name" value="${prefillName?esc(prefillName):''}" style="flex:1;">
+      <button type="button" class="btn btn-outline btn-sm" style="width:auto;" onclick="openBankNamePicker()">📋 لسٹ سے چنیں</button>
+    </div>
     <label>اکاؤنٹ نمبر</label><input type="text" id="b_acc">
     <label>برانچ</label><input type="text" id="b_branch">
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveBank()">محفوظ کریں</button>
   `;
   openSheet('نیا بینک', body);
+}
+let bankPickerSearch='';
+function openBankNamePicker(){
+  bankPickerSearch='';
+  openSheet('بینک/اکاؤنٹ منتخب کریں', bankPickerListHTML());
+}
+function bankPickerListHTML(){
+  const q=(bankPickerSearch||'').trim().toLowerCase();
+  const list=COMMON_BANKS.filter(b=>!q||b.toLowerCase().includes(q));
+  return `
+    <input type="text" placeholder="بینک تلاش کریں..." value="${esc(bankPickerSearch)}" oninput="bankPickerSearch=this.value; document.getElementById('bankPickerList').innerHTML=bankPickerListHTML2();" autofocus>
+    <div id="bankPickerList" style="margin-top:10px;max-height:50vh;overflow-y:auto;">${bankPickerListHTML2()}</div>
+    <button type="button" class="btn btn-outline" style="margin-top:10px;" onclick="openBankForm(bankPickerSearch)">✏️ فہرست میں نہیں — خود لکھیں</button>
+  `;
+}
+function bankPickerListHTML2(){
+  const q=(bankPickerSearch||'').trim().toLowerCase();
+  const list=COMMON_BANKS.filter(b=>!q||b.toLowerCase().includes(q));
+  if(!list.length) return `<div class="empty"><div class="ic">🏦</div>کوئی میچ نہیں ملا</div>`;
+  return list.map(b=>`<div class="list-item" style="cursor:pointer;" onclick="openBankForm('${b.replace(/'/g,"\\'")}')"><div class="name">${esc(b)}</div></div>`).join('');
 }
 async function saveBank(){
   if(!lockSubmit()) return;
