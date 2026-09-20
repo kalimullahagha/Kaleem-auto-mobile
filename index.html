@@ -338,6 +338,7 @@ const deviceId = (function(){
   return id;
 })();
 let lastLocalWriteStamp=0;
+let currentOverlayRefresh=null;
 function startFBListener(){
   if(unsubscribeFB || !hasFirebase) return;
   unsubscribeFB = FB_DOC().onSnapshot(function(snap){
@@ -358,7 +359,9 @@ function startFBListener(){
       try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
       cloudWorks=true;
       const overlayEmpty = !document.getElementById('overlayRoot') || !document.getElementById('overlayRoot').innerHTML.trim();
-      if(overlayEmpty && !isLocked()){ render(); }
+      if(isLocked()) return;
+      if(overlayEmpty){ render(); }
+      else if(typeof currentOverlayRefresh==='function'){ currentOverlayRefresh(); }
     }catch(e){ console.error('Firestore apply failed', e); }
   }, function(err){ console.error('Firestore listen error', err); });
 }
@@ -1452,6 +1455,7 @@ function openCustomerReport(id){
   renderCustomerReport(id);
 }
 function renderCustomerReport(id){
+  currentOverlayRefresh=()=>renderCustomerReport(id);
   const {c, due, asc} = computeCustomerLedger(id);
   let filtered = asc.slice();
   if(custReportFrom) filtered = filtered.filter(t=>t.date>=custReportFrom);
@@ -1495,6 +1499,7 @@ function renderCustomerReport(id){
   openSheet('رپورٹ — '+c.name, body);
 }
 function openCustomerDetail(id){
+  currentOverlayRefresh=()=>openCustomerDetail(id);
   const {c, due, asc, totalGiven, totalReceived} = computeCustomerLedger(id);
   const desc = asc.slice().reverse();
   const rows = desc.length? desc.map(t=>`<div class="list-item">
@@ -1872,6 +1877,7 @@ async function deleteAmanatPerson(id){
   await saveDB(); closeSheet(); renderAmanat(document.getElementById('main')); toast('حذف ہو گیا (ری سائیکل بن میں محفوظ)');
 }
 function openAmanatDetail(id){
+  currentOverlayRefresh=()=>openAmanatDetail(id);
   const p=DB.amanatPersons.find(x=>x.id===id);
   const bal=amanatBalance(id);
   const entries=[...DB.amanatEntries.filter(e=>e.personId===id)].sort((a,b)=>a.createdAt-b.createdAt);
@@ -2609,6 +2615,7 @@ function supplierRowsHTML(id){
 function filterSupplierRows(id){ const box=document.getElementById('supRows'); if(box) box.innerHTML=supplierRowsHTML(id); }
 function openSupplierDetail(id){ supplierDetailSearch=''; renderSupplierDetailScreen(id); }
 function renderSupplierDetailScreen(id){
+  currentOverlayRefresh=()=>renderSupplierDetailScreen(id);
   const s=DB.suppliers.find(x=>x.id===id);
   if(!s) return;
   const due=supplierDue(id);
@@ -2748,6 +2755,7 @@ function openCashReport(){
   renderCashReport();
 }
 function renderCashReport(){
+  currentOverlayRefresh=()=>renderCashReport();
   const entries = computeCashLedger();
   let filtered = entries.slice();
   if(cashReportFrom) filtered = filtered.filter(e=>e.date>=cashReportFrom);
@@ -2983,6 +2991,7 @@ function computeBankLedger(bankId){
   return { b, entries };
 }
 function openBankDetail(bankId){
+  currentOverlayRefresh=()=>openBankDetail(bankId);
   const {b, entries} = computeBankLedger(bankId);
   const rows=entries.map(e=>{
     return `<div class="list-item"><div><div class="name">${esc(e.desc)}${e.photo?' 📎':''}</div><div class="meta">${fmtDateTime(e.date,e.createdAt)}</div></div>
@@ -3011,6 +3020,7 @@ function openBankReport(bankId){
   renderBankReport(bankId);
 }
 function renderBankReport(bankId){
+  currentOverlayRefresh=()=>renderBankReport(bankId);
   const {b, entries} = computeBankLedger(bankId);
   let filtered = entries.slice();
   if(bankReportFrom) filtered = filtered.filter(e=>e.date>=bankReportFrom);
@@ -3232,7 +3242,7 @@ function openSheet(title, bodyHTML){
       </div>
     </div>`;
 }
-function closeSheet(){ document.getElementById('overlayRoot').innerHTML=''; }
+function closeSheet(){ currentOverlayRefresh=null; document.getElementById('overlayRoot').innerHTML=''; }
 
 /* Custom confirm dialog — replaces native confirm() which can be blocked
    inside sandboxed webviews (some file-preview/browser embeds silently
