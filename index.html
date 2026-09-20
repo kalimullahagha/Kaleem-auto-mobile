@@ -1032,9 +1032,20 @@ function stockLabel(i){
   return `${st}`;
 }
 let stockSearch='';
+let stockView='list'; // 'list' | 'inReport' | 'outReport' | 'itemHistory'
+let stockHistoryItemId=null;
+let stockRepSearch='', stockRepFrom='', stockRepTo='';
+
 function renderStock(main){
+  if(stockView==='inReport') return renderStockReport(main,'in');
+  if(stockView==='outReport') return renderStockReport(main,'out');
+  if(stockView==='itemHistory') return renderItemHistory(main);
   const filtered = DB.items.filter(i=> i.name.toLowerCase().includes(stockSearch.toLowerCase()) || (i.barcode||'').includes(stockSearch));
   main.innerHTML = `
+    <div class="btn-row" style="margin-bottom:10px;">
+      <button class="btn btn-outline btn-sm" style="flex:1;color:var(--green);border-color:var(--green);" onclick="stockView='inReport'; renderStock(document.getElementById('main'))">📈 اسٹاک اِن رپورٹ</button>
+      <button class="btn btn-outline btn-sm" style="flex:1;color:var(--red);border-color:var(--red);" onclick="stockView='outReport'; renderStock(document.getElementById('main'))">📉 اسٹاک آؤٹ رپورٹ</button>
+    </div>
     <div class="searchbar">
       <input type="text" placeholder="آئٹم تلاش کریں..." value="${esc(stockSearch)}" oninput="stockSearch=this.value; renderStock(document.getElementById('main'))">
       <button class="btn btn-navy btn-sm" style="width:auto;" onclick="openBarcodeScanner(code=>{stockSearch=code; renderStock(document.getElementById('main'));})">📷</button>
@@ -1047,9 +1058,163 @@ function renderStock(main){
             ${i.photo?`<img src="${i.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;">`:`<div style="width:44px;height:44px;border-radius:8px;background:#f0ede6;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">📦</div>`}
             <div><div class="name">${esc(i.name)}</div><div class="meta">فروخت قیمت: ${money(i.salePrice)} • اسٹاک: ${stockLabel(i)}</div></div>
           </div>
-          <span class="badge ${low?'low':'ok'}">${low?'⚠️ کم':'ٹھیک'}</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="btn btn-outline btn-sm" style="padding:6px 10px;" onclick="event.stopPropagation(); openItemHistory('${i.id}')">📊</button>
+            <span class="badge ${low?'low':'ok'}">${low?'⚠️ کم':'ٹھیک'}</span>
+          </div>
         </div>`;
       }).join('') : `<div class="empty"><div class="ic">📦</div>${stockSearch?'اس بارکوڈ/نام سے کوئی آئٹم موجود نہیں':'کوئی آئٹم نہیں ملا'}<br><br><button class="btn btn-primary" onclick="openItemForm(null,'${esc(stockSearch)}')">+ نیا آئٹم شامل کریں</button></div>`}
+    </div>
+  `;
+}
+
+/* ----- Stock In/Out movements, derived from purchases (in) and sales (out) ----- */
+function stockMovements(){
+  const moves=[];
+  DB.purchases.forEach(p=>{
+    purchaseItems(p).forEach(it=>{
+      const item=itemById(it.itemId);
+      const qty=Number(it.qty)||0;
+      const price=Number(it.cost)||0;
+      moves.push({type:'in', date:p.date, createdAt:p.createdAt||0, itemId:it.itemId, itemName:it.name||(item?item.name:'—'), qty, price, amount:qty*price, party:p.supplier||''});
+    });
+  });
+  DB.sales.forEach(s=>{
+    (s.items||[]).forEach(it=>{
+      const item=itemById(it.itemId);
+      const qty=Number(it.qty)||0;
+      const price=Number(it.price)||0;
+      const c=custById(s.customerId);
+      moves.push({type:'out', date:s.date, createdAt:s.createdAt||0, itemId:it.itemId, itemName:it.name||(item?item.name:'—'), qty, price, amount:qty*price, party:c?c.name:'واک اِن گاہک', invoiceNo:s.invoiceNo});
+    });
+  });
+  return moves;
+}
+function renderStockReport(main, type){
+  let list = stockMovements().filter(m=>m.type===type);
+  const q=(stockRepSearch||'').trim().toLowerCase();
+  if(q) list = list.filter(m=> m.itemName.toLowerCase().includes(q) || (m.party||'').toLowerCase().includes(q));
+  if(stockRepFrom) list = list.filter(m=>m.date>=stockRepFrom);
+  if(stockRepTo) list = list.filter(m=>m.date<=stockRepTo);
+  list.sort((a,b)=>b.createdAt-a.createdAt);
+  const totalAmt = list.reduce((s,m)=>s+m.amount,0);
+  const totalQty = list.reduce((s,m)=>s+m.qty,0);
+  const color = type==='in' ? 'var(--green)' : 'var(--red)';
+  const partyLabel = type==='in' ? 'سپلائر' : 'کسٹمر';
+  main.innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="stockView='list'; renderStock(document.getElementById('main'))">‹ واپس</button>
+    <div class="card" style="margin-top:10px;">
+      <label>تلاش کریں (آئٹم یا ${partyLabel} کا نام)</label>
+      <input type="text" value="${esc(stockRepSearch||'')}" oninput="stockRepSearch=this.value; renderStockReport(document.getElementById('main'),'${type}')">
+      <div class="grid2" style="margin-top:8px;">
+        <div><label>تاریخ سے</label><input type="date" value="${stockRepFrom||''}" onchange="stockRepFrom=this.value; renderStockReport(document.getElementById('main'),'${type}')"></div>
+        <div><label>تاریخ تک</label><input type="date" value="${stockRepTo||''}" onchange="stockRepTo=this.value; renderStockReport(document.getElementById('main'),'${type}')"></div>
+      </div>
+      ${(stockRepFrom||stockRepTo||stockRepSearch)?`<button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="stockRepSearch='';stockRepFrom='';stockRepTo=''; renderStockReport(document.getElementById('main'),'${type}')">فلٹر صاف کریں</button>`:''}
+    </div>
+    <div class="grid2" style="margin-top:10px;">
+      <div class="stat"><div class="label">کل رقم</div><div class="value" style="color:${color};">${money(totalAmt)}</div></div>
+      <div class="stat"><div class="label">کل مقدار</div><div class="value">${money(totalQty)}</div></div>
+    </div>
+    <div class="stat" style="margin-top:10px;"><div class="label">انٹریز</div><div class="value">${list.length}</div></div>
+    <div class="card" style="margin-top:10px;">
+      ${list.length? list.map(m=>`
+        <div class="list-item">
+          <div>
+            <div class="name">${esc(m.itemName)}</div>
+            <div class="meta">${fmtDateTime(m.date,m.createdAt)}${m.party?' • '+esc(m.party):''}${m.invoiceNo?' • '+esc(m.invoiceNo):''}</div>
+          </div>
+          <div style="text-align:left;">
+            <div style="font-weight:800;color:${color};">${money(m.amount)}</div>
+            <div class="meta">${m.qty} × ${money(m.price)}</div>
+          </div>
+        </div>`).join('') : `<div class="empty"><div class="ic">📦</div>کوئی انٹری نہیں ملی</div>`}
+    </div>
+  `;
+}
+function openItemHistory(id){ stockHistoryItemId=id; stockView='itemHistory'; renderStock(document.getElementById('main')); }
+function quickStockAction(itemId, type){
+  const it=itemById(itemId); if(!it) return;
+  const priceDefault = type==='in' ? (it.costPrice||0) : (it.salePrice||0);
+  const body = `
+    <label>مقدار (پیس)</label><input type="number" step="0.01" id="qs_qty" value="1">
+    <label>${type==='in'?'فی پیس خریداری قیمت':'فی پیس فروخت قیمت'}</label><input type="number" id="qs_price" value="${priceDefault}">
+    <label>ادائیگی کی قسم</label>
+    <select id="qs_pay" onchange="document.getElementById('qs_bankwrap').style.display=this.value==='بینک'?'block':'none';">
+      <option value="نقد">نقد</option>
+      <option value="بینک">بینک</option>
+    </select>
+    <div id="qs_bankwrap" style="display:none;">
+      <label>بینک</label>
+      <select id="qs_bank">${DB.banks.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select>
+    </div>
+    <label>تاریخ</label><input type="date" id="qs_date" value="${todayStr()}">
+    <button class="btn ${type==='in'?'btn-green':'btn-red'}" style="margin-top:14px;" onclick="saveQuickStock('${itemId}','${type}')">${type==='in'?'✅ اسٹاک اِن کریں':'✅ اسٹاک آؤٹ کریں'}</button>
+  `;
+  openSheet(type==='in'?'اسٹاک اِن (خریداری)':'اسٹاک آؤٹ (فروخت)', body);
+}
+async function saveQuickStock(itemId, type){
+  if(!lockSubmit()) return;
+  try{
+    const it=itemById(itemId); if(!it) return;
+    const qty=parseFloat(document.getElementById('qs_qty').value)||0;
+    const price=parseFloat(document.getElementById('qs_price').value)||0;
+    const pay=document.getElementById('qs_pay').value;
+    const bankId=pay==='بینک' ? (document.getElementById('qs_bank').value||null) : null;
+    const date=document.getElementById('qs_date').value||todayStr();
+    if(qty<=0){ toast('مقدار درست لکھیں'); return; }
+    if(type==='in'){
+      const purchase={id:uid(), createdAt:Date.now(), date, supplier:'', supplierId:null, itemId:it.id, itemName:it.name, qty, cost:price, total:qty*price, paymentType:pay, bankId};
+      DB.purchases.push(purchase);
+      it.stock=(Number(it.stock)||0)+qty;
+      await saveDB(); closeSheet(); toast('اسٹاک اِن ہو گیا'); renderStock(document.getElementById('main'));
+    } else {
+      if(qty>(Number(it.stock)||0) && !(await customConfirm('موجودہ اسٹاک سے زیادہ مقدار ہے، پھر بھی جاری رکھیں؟'))) return;
+      DB.invoiceCounter++;
+      const invoiceNo='INV-'+String(DB.invoiceCounter).padStart(4,'0');
+      const sale={id:uid(), invoiceNo, date, createdAt:Date.now(), customerId:null,
+        items:[{itemId:it.id,name:it.name,qty,price}], subtotal:qty*price, discount:0, netTotal:qty*price,
+        paymentType:pay, bankId, signature:null, billImage:null};
+      DB.sales.push(sale);
+      it.stock=(Number(it.stock)||0)-qty;
+      await saveDB(); closeSheet(); toast('اسٹاک آؤٹ ہو گیا — '+invoiceNo); renderStock(document.getElementById('main'));
+    }
+  } finally { unlockSubmit(); }
+}
+function itemMovements(itemId){ return stockMovements().filter(m=>m.itemId===itemId).sort((a,b)=>a.createdAt-b.createdAt); }
+function renderItemHistory(main){
+  const it=itemById(stockHistoryItemId);
+  if(!it){ stockView='list'; renderStock(main); return; }
+  const moves=itemMovements(it.id);
+  let running=0;
+  const withBalance=moves.map(m=>{ running += (m.type==='in'?m.qty:-m.qty); return Object.assign({},m,{balance:running}); });
+  withBalance.reverse();
+  const value=(Number(it.stock)||0)*(Number(it.costPrice)||0);
+  main.innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="stockView='list'; renderStock(document.getElementById('main'))">‹ واپس</button>
+    <div class="card" style="margin-top:10px;">
+      <h3>${esc(it.name)}</h3>
+      <div class="grid2">
+        <div class="stat good"><div class="label">موجودہ اسٹاک</div><div class="value">${stockLabel(it)}</div></div>
+        <div class="stat"><div class="label">اسٹاک کی مالیت</div><div class="value">${money(value)}</div></div>
+      </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn btn-red" onclick="quickStockAction('${it.id}','out')">➖ باہر / فروخت</button>
+        <button class="btn btn-green" onclick="quickStockAction('${it.id}','in')">➕ اِن / خریدیں</button>
+      </div>
+    </div>
+    <div class="card">
+      ${withBalance.length? withBalance.map(m=>`
+        <div class="list-item">
+          <div>
+            <div class="name" style="color:${m.type==='in'?'var(--green)':'var(--red)'};">${m.type==='in'?'⬆️ اِن':'⬇️ آؤٹ'} ${m.qty}</div>
+            <div class="meta">${fmtDateTime(m.date,m.createdAt)}${m.party?' • '+esc(m.party):''}</div>
+          </div>
+          <div style="text-align:left;">
+            <div class="meta">بعد از اسٹاک</div>
+            <div style="font-weight:800;">${m.balance}</div>
+          </div>
+        </div>`).join('') : `<div class="empty"><div class="ic">📦</div>ابھی کوئی اِن/آؤٹ انٹری نہیں</div>`}
     </div>
   `;
 }
