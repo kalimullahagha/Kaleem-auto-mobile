@@ -452,6 +452,11 @@ function fmtDate(s){ if(!s) return ''; const d=new Date(s); return d.toLocaleDat
 function fmtTime(ts){ if(!ts) return ''; const d=new Date(ts); return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}); }
 function fmtDateTime(dateStr,ts){ return fmtDate(dateStr) + (ts?' • '+fmtTime(ts):''); }
 function money(n){ n=Number(n)||0; return n.toLocaleString('en-US',{maximumFractionDigits:2}); }
+function reFocus(id,pos,fn){
+  fn();
+  const el=document.getElementById(id);
+  if(el){ el.focus({preventScroll:true}); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+}
 function toast(msg){
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   document.body.appendChild(t); setTimeout(()=>t.remove(),2200);
@@ -574,27 +579,77 @@ function recentSalesHTML(){
   const list=[...DB.sales].sort((a,b)=>b.createdAt-a.createdAt).slice(0,5);
   if(!list.length) return `<div class="empty"><div class="ic">🧾</div>ابھی کوئی سیل نہیں ہوئی</div>`;
   return list.map(s=>{
-    const c=custById(s.customerId);
-    return `<div class="list-item" onclick="showInvoice(DB.sales.find(x=>x.id==='${s.id}'))" style="cursor:pointer;"><div><div class="name">${esc(c?c.name:'واک اِن گاہک')} — ${s.invoiceNo}</div>
+    return `<div class="list-item" onclick="showInvoice(DB.sales.find(x=>x.id==='${s.id}'))" style="cursor:pointer;"><div><div class="name">${esc(saleCustomerName(s))} — ${s.invoiceNo}</div>
       <div class="meta">${fmtDate(s.date)} • ${s.paymentType}</div></div><div style="font-weight:800;">${money(s.netTotal)}</div></div>`;
   }).join('');
 }
 
 /* ===================== POS ===================== */
 let cart=[];
-let posCustomerId=null, posPayType='نقد', posBankId=null;
+let posCustomerId=null, posPayType='نقد', posBankId=null, posQuickName='';
+function saleCustomerName(s){
+  const c=custById(s.customerId);
+  if(c) return c.name;
+  if(s.customerName) return s.customerName;
+  return 'واک اِن گاہک';
+}
 let editingSaleId=null, editingSaleDiscount=0;
 let posSignature=null, posBillImage=null;
+let kpBuffer='0', colBillImage=null;
+function kpRenderDisplay(){
+  const disp=document.getElementById('col_amt_display');
+  const hidden=document.getElementById('col_amt');
+  if(disp) disp.textContent = kpBuffer;
+  if(hidden) hidden.value = kpBuffer;
+}
+function kpPress(k){
+  if(k==='.' && kpBuffer.includes('.')) return;
+  if(kpBuffer==='0' && k!=='.') kpBuffer=k; else kpBuffer+=k;
+  kpRenderDisplay();
+}
+function kpBackspace(){
+  kpBuffer = kpBuffer.length>1 ? kpBuffer.slice(0,-1) : '0';
+  kpRenderDisplay();
+}
+function captureColBillPhoto(input){
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      const maxW=800; const scale=Math.min(1,maxW/img.width);
+      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+      colBillImage=cv.toDataURL('image/jpeg',0.6);
+      const wrap=document.getElementById('col_photowrap');
+      if(wrap) wrap.innerHTML = colBillImagePreviewHtml();
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function colBillImagePreviewHtml(){
+  return colBillImage
+    ? `<img src="${colBillImage}" style="max-width:100%;border-radius:10px;margin-bottom:6px;">
+       <button type="button" class="btn btn-outline btn-sm" onclick="colBillImage=null; document.getElementById('col_photowrap').innerHTML=colBillImagePreviewHtml();">🗑️ تصویر ہٹائیں</button>`
+    : `<label style="display:block;">
+         <div class="btn btn-outline btn-sm" style="text-align:center;">📎 بل کی تصویر / پی ڈی ایف منسلک کریں</div>
+         <input type="file" accept="image/*" style="display:none;" onchange="captureColBillPhoto(this)">
+       </label>`;
+}
 function renderPOS(main){
   main.innerHTML = `
     ${editingSaleId?`<div class="card" style="background:#fff7e6;border:1px solid #f0c36d;"><b>✏️ بل میں ترمیم ہو رہی ہے</b> — محفوظ کرنے پر پرانا بل اپڈیٹ ہو جائے گا۔ <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="cancelEditSale()">❌ ترمیم منسوخ کریں</button></div>`:''}
     <div class="card">
       <label>کسٹمر</label>
-      <select id="posCust" onchange="posCustomerId=this.value">
+      <select id="posCust" onchange="posCustomerId=this.value; if(posCustomerId){posQuickName=''; document.getElementById('posQuickNameInput').value='';}">
         <option value="">— واک اِن گاہک (بغیر نام) —</option>
         ${DB.customers.map(c=>`<option value="${c.id}" ${posCustomerId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
       </select>
       <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="openCustomerForm(true)">+ نیا کسٹمر شامل کریں</button>
+      <label style="margin-top:8px;">یا فوری نام لکھیں (بغیر کسٹمر لسٹ میں شامل کیے)</label>
+      <input type="text" id="posQuickNameInput" placeholder="مثلاً: راشد بھائی" value="${esc(posQuickName||'')}" oninput="posQuickName=this.value; if(this.value.trim()){posCustomerId=null; document.getElementById('posCust').value='';}">
+      ${posQuickName?'<div class="meta" style="margin-top:4px;color:var(--red);">⚠️ فوری نام صرف بل پر دکھے گا — ادھار کا حساب (خاتہ) صرف محفوظ شدہ کسٹمر پر بنتا ہے</div>':''}
     </div>
 
     <div class="card">
@@ -895,6 +950,7 @@ async function finalizeSale(){
   try{
   if(!cart.length){ toast('کارٹ میں کچھ نہیں ہے'); return; }
   if(posPayType==='بینک' && !posBankId){ toast('بینک منتخب کریں'); return; }
+  if(posPayType==='ادھار' && !posCustomerId){ toast('ادھار کے لیے محفوظ شدہ کسٹمر منتخب کریں (فوری نام سے ادھار کا حساب نہیں بنتا)'); return; }
   const discount = parseFloat(document.getElementById('posDiscount').value)||0;
   const subtotal = cart.reduce((a,c)=>a+c.qty*c.price,0);
   const netTotal = subtotal-discount;
@@ -902,6 +958,7 @@ async function finalizeSale(){
     const sale=DB.sales.find(s=>s.id===editingSaleId);
     if(sale){
       sale.customerId = posCustomerId||null;
+      sale.customerName = (!posCustomerId && posQuickName.trim()) ? posQuickName.trim() : null;
       sale.items = cart.map(c=>({itemId:c.itemId,name:c.name,qty:c.qty,price:c.price}));
       sale.subtotal = subtotal; sale.discount = discount; sale.netTotal = netTotal;
       sale.paymentType = posPayType; sale.bankId = posPayType==='بینک'?posBankId:null;
@@ -910,7 +967,7 @@ async function finalizeSale(){
       cart.forEach(c=>{ const it=itemById(c.itemId); if(it) it.stock=(Number(it.stock)||0)-c.qty; });
       await saveDB();
       const savedSale=sale;
-      cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; editingSaleId=null; editingSaleDiscount=0; posSignature=null; posBillImage=null;
+      cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; posQuickName=''; editingSaleId=null; editingSaleDiscount=0; posSignature=null; posBillImage=null;
       toast('✅ بل میں ترمیم محفوظ ہو گئی — '+savedSale.invoiceNo);
       showInvoice(savedSale);
     }
@@ -921,6 +978,7 @@ async function finalizeSale(){
   const sale = {
     id:uid(), invoiceNo, date:todayStr(), createdAt:Date.now(),
     customerId: posCustomerId||null,
+    customerName: (!posCustomerId && posQuickName.trim()) ? posQuickName.trim() : null,
     items: cart.map(c=>({itemId:c.itemId,name:c.name,qty:c.qty,price:c.price})),
     subtotal, discount, netTotal,
     paymentType: posPayType, bankId: posPayType==='بینک'?posBankId:null,
@@ -930,7 +988,7 @@ async function finalizeSale(){
   DB.sales.push(sale);
   cart.forEach(c=>{ const it=itemById(c.itemId); if(it) it.stock=(Number(it.stock)||0)-c.qty; });
   await saveDB();
-  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; posSignature=null; posBillImage=null;
+  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; posQuickName=''; posSignature=null; posBillImage=null;
   toast('✅ سیل محفوظ ہو گئی — '+invoiceNo);
   showInvoice(sale);
   } finally { unlockSubmit(); }
@@ -942,6 +1000,7 @@ function editSale(saleId){
   sale.items.forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); });
   cart = sale.items.map(it=>({itemId:it.itemId,name:it.name,price:it.price,qty:it.qty}));
   posCustomerId = sale.customerId||null;
+  posQuickName = sale.customerName||'';
   posPayType = sale.paymentType||'نقد';
   posBankId = sale.bankId||null;
   editingSaleId = sale.id;
@@ -955,7 +1014,7 @@ function cancelEditSale(){
     const sale=DB.sales.find(s=>s.id===editingSaleId);
     if(sale){ sale.items.forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)-Number(it.qty||0); }); }
   }
-  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; editingSaleId=null; editingSaleDiscount=0; posSignature=null; posBillImage=null;
+  cart=[]; posCustomerId=null; posPayType='نقد'; posBankId=null; posQuickName=''; editingSaleId=null; editingSaleDiscount=0; posSignature=null; posBillImage=null;
   go('dash');
 }
 
@@ -971,7 +1030,7 @@ function showInvoice(sale){
       <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-top:8px;">
         <span>بل نمبر: <b>${sale.invoiceNo}</b></span><span>${fmtDateTime(sale.date,sale.createdAt)}</span>
       </div>
-      <div style="font-size:12.5px;margin-top:2px;">کسٹمر: <b>${c?esc(c.name):'واک اِن گاہک'}</b></div>
+      <div style="font-size:12.5px;margin-top:2px;">کسٹمر: <b>${esc(saleCustomerName(sale))}</b></div>
       <table><thead><tr><th>آئٹم</th><th>مقدار</th><th>قیمت</th><th>ٹوٹل</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="totalsbox">
         <div class="tr"><span>سب ٹوٹل</span><span>${money(sale.subtotal)}</span></div>
@@ -1040,18 +1099,21 @@ function renderStock(main){
   if(stockView==='inReport') return renderStockReport(main,'in');
   if(stockView==='outReport') return renderStockReport(main,'out');
   if(stockView==='itemHistory') return renderItemHistory(main);
-  const filtered = DB.items.filter(i=> i.name.toLowerCase().includes(stockSearch.toLowerCase()) || (i.barcode||'').includes(stockSearch));
   main.innerHTML = `
     <div class="btn-row" style="margin-bottom:10px;">
       <button class="btn btn-outline btn-sm" style="flex:1;color:var(--green);border-color:var(--green);" onclick="stockView='inReport'; renderStock(document.getElementById('main'))">📈 اسٹاک اِن رپورٹ</button>
       <button class="btn btn-outline btn-sm" style="flex:1;color:var(--red);border-color:var(--red);" onclick="stockView='outReport'; renderStock(document.getElementById('main'))">📉 اسٹاک آؤٹ رپورٹ</button>
     </div>
     <div class="searchbar">
-      <input type="text" placeholder="آئٹم تلاش کریں..." value="${esc(stockSearch)}" oninput="stockSearch=this.value; renderStock(document.getElementById('main'))">
+      <input type="text" placeholder="آئٹم تلاش کریں..." value="${esc(stockSearch)}" oninput="stockSearch=this.value; filterStockList()">
       <button class="btn btn-navy btn-sm" style="width:auto;" onclick="openBarcodeScanner(code=>{stockSearch=code; renderStock(document.getElementById('main'));})">📷</button>
     </div>
-    <div class="card">
-      ${filtered.length? filtered.map(i=>{
+    <div class="card" id="stockList">${stockListHTML()}</div>
+  `;
+}
+function stockListHTML(){
+  const filtered = DB.items.filter(i=> i.name.toLowerCase().includes(stockSearch.toLowerCase()) || (i.barcode||'').includes(stockSearch));
+  return filtered.length? filtered.map(i=>{
         const low=(Number(i.stock)||0)<=(Number(i.reorderLevel)||0);
         return `<div class="list-item" onclick="openItemForm('${i.id}')">
           <div style="display:flex;align-items:center;gap:10px;">
@@ -1063,10 +1125,9 @@ function renderStock(main){
             <span class="badge ${low?'low':'ok'}">${low?'⚠️ کم':'ٹھیک'}</span>
           </div>
         </div>`;
-      }).join('') : `<div class="empty"><div class="ic">📦</div>${stockSearch?'اس بارکوڈ/نام سے کوئی آئٹم موجود نہیں':'کوئی آئٹم نہیں ملا'}<br><br><button class="btn btn-primary" onclick="openItemForm(null,'${esc(stockSearch)}')">+ نیا آئٹم شامل کریں</button></div>`}
-    </div>
-  `;
+      }).join('') : `<div class="empty"><div class="ic">📦</div>${stockSearch?'اس بارکوڈ/نام سے کوئی آئٹم موجود نہیں':'کوئی آئٹم نہیں ملا'}<br><br><button class="btn btn-primary" onclick="openItemForm(null,'${esc(stockSearch)}')">+ نیا آئٹم شامل کریں</button></div>`;
 }
+function filterStockList(){ const box=document.getElementById('stockList'); if(box) box.innerHTML=stockListHTML(); }
 
 /* ----- Stock In/Out movements, derived from purchases (in) and sales (out) ----- */
 function stockMovements(){
@@ -1085,7 +1146,7 @@ function stockMovements(){
       const qty=Number(it.qty)||0;
       const price=Number(it.price)||0;
       const c=custById(s.customerId);
-      moves.push({type:'out', date:s.date, createdAt:s.createdAt||0, itemId:it.itemId, itemName:it.name||(item?item.name:'—'), qty, price, amount:qty*price, party:c?c.name:'واک اِن گاہک', invoiceNo:s.invoiceNo});
+      moves.push({type:'out', date:s.date, createdAt:s.createdAt||0, itemId:it.itemId, itemName:it.name||(item?item.name:'—'), qty, price, amount:qty*price, party:saleCustomerName(s), invoiceNo:s.invoiceNo});
     });
   });
   return moves;
@@ -1105,7 +1166,7 @@ function renderStockReport(main, type){
     <button class="btn btn-outline btn-sm" onclick="stockView='list'; renderStock(document.getElementById('main'))">‹ واپس</button>
     <div class="card" style="margin-top:10px;">
       <label>تلاش کریں (آئٹم یا ${partyLabel} کا نام)</label>
-      <input type="text" value="${esc(stockRepSearch||'')}" oninput="stockRepSearch=this.value; renderStockReport(document.getElementById('main'),'${type}')">
+      <input type="text" id="stockRepSearchInput" value="${esc(stockRepSearch||'')}" oninput="stockRepSearch=this.value; reFocus('stockRepSearchInput',this.selectionStart,()=>renderStockReport(document.getElementById('main'),'${type}'))">
       <div class="grid2" style="margin-top:8px;">
         <div><label>تاریخ سے</label><input type="date" value="${stockRepFrom||''}" onchange="stockRepFrom=this.value; renderStockReport(document.getElementById('main'),'${type}')"></div>
         <div><label>تاریخ تک</label><input type="date" value="${stockRepTo||''}" onchange="stockRepTo=this.value; renderStockReport(document.getElementById('main'),'${type}')"></div>
@@ -1315,7 +1376,7 @@ let custSearch='';
 function renderCustomers(main){
   const filtered=DB.customers.filter(c=>c.name.toLowerCase().includes(custSearch.toLowerCase()));
   main.innerHTML = `
-    <div class="searchbar"><input type="text" placeholder="کسٹمر تلاش کریں..." value="${esc(custSearch)}" oninput="custSearch=this.value; renderCustomers(document.getElementById('main'))"></div>
+    <div class="searchbar"><input type="text" id="custSearchInput" placeholder="کسٹمر تلاش کریں..." value="${esc(custSearch)}" oninput="custSearch=this.value; reFocus('custSearchInput',this.selectionStart,()=>renderCustomers(document.getElementById('main')))"></div>
     <div class="card">
       ${filtered.length? filtered.map(c=>{
         const due=custDue(c);
@@ -1415,7 +1476,7 @@ function renderCustomerReport(id){
       <button class="btn wa" style="flex:1;" onclick="waReminder('${c.id}')">📲 ریمائنڈر</button>
       <button class="btn btn-outline" style="flex:1;" onclick="printCustomerLedger('${c.id}')">📄 PDF بنا کر بھیجیں</button>
     </div>
-    <input type="text" style="margin-top:10px;" placeholder="انٹریز تلاش کریں..." value="${esc(custReportSearch)}" oninput="custReportSearch=this.value; renderCustomerReport('${id}')">
+    <input type="text" id="custReportSearchInput" style="margin-top:10px;" placeholder="انٹریز تلاش کریں..." value="${esc(custReportSearch)}" oninput="custReportSearch=this.value; reFocus('custReportSearchInput',this.selectionStart,()=>renderCustomerReport('${id}'))">
     <div class="grid2" style="margin-top:8px;">
       <div><label>پہلی تاریخ</label><input type="date" value="${custReportFrom}" onchange="custReportFrom=this.value; renderCustomerReport('${id}')"></div>
       <div><label>آخری تاریخ</label><input type="date" value="${custReportTo}" onchange="custReportTo=this.value; renderCustomerReport('${id}')"></div>
@@ -1589,11 +1650,31 @@ function openCollectionForm(custId,colId,defaultType){
   const c = colId ? DB.collections.find(x=>x.id===colId) : null;
   const type = c ? (c.type||'received') : (defaultType||'received');
   const pay = c ? (c.paymentType||'نقد') : 'نقد';
+  kpBuffer = c && c.amount ? String(c.amount) : '0';
+  colBillImage = c ? (c.billImage||null) : null;
+  const nowTime = new Date().toTimeString().slice(0,5);
   const body=`
     <input type="hidden" id="col_type" value="${type}">
-    <label>رقم</label><input type="number" id="col_amt" value="${c?c.amount:''}">
-    <label>تاریخ</label><input type="date" id="col_date" value="${c?c.date:todayStr()}">
-    <label>${type==='given'?'رقم کہاں سے دی':'رقم کہاں وصول ہوئی'}</label>
+    <div style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px;">
+      <span style="color:var(--muted);font-size:20px;">Rs</span>
+      <span id="col_amt_display" style="font-size:26px;font-weight:800;flex:1;text-align:left;padding-inline-start:10px;direction:ltr;">${esc(kpBuffer)}</span>
+      <button type="button" onclick="kpBackspace()" style="background:none;border:none;font-size:20px;cursor:pointer;">⌫</button>
+    </div>
+    <input type="hidden" id="col_amt" value="${esc(kpBuffer)}">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+      ${['7','8','9','4','5','6','1','2','3','.','0','⌫'].map(k=>
+        k==='⌫' ? `<button type="button" class="btn btn-outline" onclick="kpBackspace()">⌫</button>`
+                 : `<button type="button" class="btn btn-outline" onclick="kpPress('${k}')">${k}</button>`
+      ).join('')}
+    </div>
+    <label>تفصیل (اختیاری)</label><input type="text" id="col_notes" value="${c?esc(c.notes||''):''}">
+    <div class="grid2" style="margin-top:8px;">
+      <div><label>وقت</label><input type="time" id="col_time" value="${c&&c.time?c.time:nowTime}"></div>
+      <div><label>تاریخ</label><input type="date" id="col_date" value="${c?c.date:todayStr()}"></div>
+    </div>
+    <label style="margin-top:8px;">بل نمبر (اختیاری)</label><input type="text" id="col_billno" value="${c?esc(c.billNo||''):''}">
+    <div id="col_photowrap" style="margin-top:8px;">${colBillImagePreviewHtml()}</div>
+    <label style="margin-top:8px;">${type==='given'?'رقم کہاں سے دی':'رقم کہاں وصول ہوئی'}</label>
     <select id="col_pay" onchange="document.getElementById('col_bankwrap').style.display=this.value==='بینک'?'block':'none';">
       <option value="نقد" ${pay==='نقد'?'selected':''}>💵 نقد (کیش)</option>
       <option value="بینک" ${pay==='بینک'?'selected':''}>🏦 بینک</option>
@@ -1603,7 +1684,6 @@ function openCollectionForm(custId,colId,defaultType){
       <select id="col_bank">${DB.banks.map(b=>`<option value="${b.id}" ${c&&c.bankId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>
       ${!DB.banks.length?'<div class="meta">پہلے بینک اکاؤنٹس میں جا کر ایک اکاؤنٹ شامل کریں</div>':''}
     </div>
-    <label>نوٹس</label><input type="text" id="col_notes" value="${c?esc(c.notes||''):''}">
     <button class="btn btn-primary" style="margin-top:14px;" onclick="saveCollection('${custId}','${colId||''}')">محفوظ کریں</button>
   `;
   openSheet(colId?'ترمیم': (type==='given'?'رقم دیں (قرض)':'وصولی درج کریں'), body);
@@ -1614,6 +1694,8 @@ async function saveCollection(custId,colId){
   const amount=parseFloat(document.getElementById('col_amt').value)||0;
   if(amount<=0){ toast('صحیح رقم لکھیں'); return; }
   const date=document.getElementById('col_date').value||todayStr();
+  const time=document.getElementById('col_time').value||'';
+  const billNo=document.getElementById('col_billno').value.trim();
   const notes=document.getElementById('col_notes').value.trim();
   const type=document.getElementById('col_type').value||'received';
   const paymentType=document.getElementById('col_pay').value||'نقد';
@@ -1621,10 +1703,11 @@ async function saveCollection(custId,colId){
   if(paymentType==='بینک' && !bankId){ toast('پہلے بینک اکاؤنٹ شامل کریں'); return; }
   if(colId){
     const c=DB.collections.find(x=>x.id===colId);
-    if(c){ c.amount=amount; c.date=date; c.notes=notes; c.type=type; c.paymentType=paymentType; c.bankId=bankId; }
+    if(c){ c.amount=amount; c.date=date; c.time=time; c.billNo=billNo; c.billImage=colBillImage; c.notes=notes; c.type=type; c.paymentType=paymentType; c.bankId=bankId; }
   } else {
-    DB.collections.push({id:uid(), createdAt:Date.now(), customerId:custId, amount, date, notes, type, paymentType, bankId});
+    DB.collections.push({id:uid(), createdAt:Date.now(), customerId:custId, amount, date, time, billNo, billImage:colBillImage, notes, type, paymentType, bankId});
   }
+  colBillImage=null;
   await saveDB(); closeSheet(); openCustomerDetail(custId); toast('وصولی محفوظ ہو گئی');
   } finally { unlockSubmit(); }
 }
@@ -1708,7 +1791,7 @@ function backToMoreMenu(){ moreView='menu'; render(); }
 function renderAllSales(main){
   let list=[...DB.sales].sort((a,b)=>b.createdAt-a.createdAt);
   const q=(allSalesSearch||'').trim().toLowerCase();
-  if(q) list=list.filter(s=>{ const c=custById(s.customerId); const cname=c?c.name:'واک اِن گاہک'; return s.invoiceNo.toLowerCase().includes(q) || cname.toLowerCase().includes(q); });
+  if(q) list=list.filter(s=>{ const cname=saleCustomerName(s); return s.invoiceNo.toLowerCase().includes(q) || cname.toLowerCase().includes(q); });
   if(allSalesFrom) list=list.filter(s=>s.date>=allSalesFrom);
   if(allSalesTo) list=list.filter(s=>s.date<=allSalesTo);
   const total=list.reduce((s,x)=>s+(Number(x.netTotal)||0),0);
@@ -1716,7 +1799,7 @@ function renderAllSales(main){
     <button class="btn btn-outline btn-sm" onclick="backToMoreMenu()">‹ واپس</button>
     <div class="card" style="margin-top:10px;">
       <label>تلاش کریں (بل نمبر یا کسٹمر کا نام)</label>
-      <input type="text" value="${esc(allSalesSearch||'')}" placeholder="مثلاً INV-0057 یا کسٹمر کا نام" oninput="allSalesSearch=this.value; renderAllSales(document.getElementById('main'))">
+      <input type="text" id="allSalesSearchInput" value="${esc(allSalesSearch||'')}" placeholder="مثلاً INV-0057 یا کسٹمر کا نام" oninput="allSalesSearch=this.value; reFocus('allSalesSearchInput',this.selectionStart,()=>renderAllSales(document.getElementById('main')))">
       <div class="grid2" style="margin-top:8px;">
         <div><label>تاریخ سے</label><input type="date" value="${allSalesFrom||''}" onchange="allSalesFrom=this.value; renderAllSales(document.getElementById('main'))"></div>
         <div><label>تاریخ تک</label><input type="date" value="${allSalesTo||''}" onchange="allSalesTo=this.value; renderAllSales(document.getElementById('main'))"></div>
@@ -1726,8 +1809,7 @@ function renderAllSales(main){
     <div class="stat" style="margin-top:10px;"><div class="label">کل (${list.length} بل)</div><div class="value">${money(total)}</div></div>
     <div class="card" style="margin-top:10px;">
       ${list.length ? list.map(s=>{
-        const c=custById(s.customerId);
-        return `<div class="list-item" onclick="showInvoice(DB.sales.find(x=>x.id==='${s.id}'))" style="cursor:pointer;"><div><div class="name">${esc(c?c.name:'واک اِن گاہک')} — ${s.invoiceNo}</div>
+        return `<div class="list-item" onclick="showInvoice(DB.sales.find(x=>x.id==='${s.id}'))" style="cursor:pointer;"><div><div class="name">${esc(saleCustomerName(s))} — ${s.invoiceNo}</div>
         <div class="meta">${fmtDateTime(s.date,s.createdAt)} • ${s.paymentType}</div></div><div style="font-weight:800;">${money(s.netTotal)}</div></div>`;
       }).join('') : `<div class="empty"><div class="ic">🧾</div>کوئی بل نہیں ملا</div>`}
     </div>
@@ -1746,7 +1828,7 @@ function renderAmanat(main){
     <button class="btn btn-outline btn-sm" onclick="backToMoreMenu()">‹ واپس</button>
     <div class="stat warn" style="margin-top:10px;"><div class="label">کل امانت (جو واپس کرنی ہے)</div><div class="value">${money(totalHeld)}</div></div>
     <div class="card">
-      <input type="text" placeholder="نام تلاش کریں..." value="${esc(amanatSearch||'')}" oninput="amanatSearch=this.value; renderAmanat(document.getElementById('main'))">
+      <input type="text" id="amanatSearchInput" placeholder="نام تلاش کریں..." value="${esc(amanatSearch||'')}" oninput="amanatSearch=this.value; reFocus('amanatSearchInput',this.selectionStart,()=>renderAmanat(document.getElementById('main')))">
       <button class="btn btn-primary" style="margin-top:8px;" onclick="openAmanatPersonForm()">+ نیا شخص شامل کریں</button>
     </div>
     <div class="card">
@@ -2682,7 +2764,7 @@ function renderCashReport(){
       <div style="font-weight:800;color:${e.in?'var(--green)':'var(--red)'}">${e.in?'+':'-'}${money(e.in||e.out)}</div>
     </div>`).join('');
   const body=`
-    <input type="text" placeholder="انٹریز تلاش کریں..." value="${esc(cashReportSearch)}" oninput="cashReportSearch=this.value; renderCashReport()">
+    <input type="text" id="cashReportSearchInput" placeholder="انٹریز تلاش کریں..." value="${esc(cashReportSearch)}" oninput="cashReportSearch=this.value; reFocus('cashReportSearchInput',this.selectionStart,()=>renderCashReport())">
     <div class="grid2" style="margin-top:8px;">
       <div><label>پہلی تاریخ</label><input type="date" value="${cashReportFrom}" onchange="cashReportFrom=this.value; renderCashReport()"></div>
       <div><label>آخری تاریخ</label><input type="date" value="${cashReportTo}" onchange="cashReportTo=this.value; renderCashReport()"></div>
@@ -2945,7 +3027,7 @@ function renderBankReport(bankId){
       <div style="font-weight:800;color:${e.in?'var(--green)':'var(--red)'}">${e.in?'+':'-'}${money(e.in||e.out)}</div>
     </div>`).join('');
   const body=`
-    <input type="text" placeholder="انٹریز تلاش کریں..." value="${esc(bankReportSearch)}" oninput="bankReportSearch=this.value; renderBankReport('${bankId}')">
+    <input type="text" id="bankReportSearchInput" placeholder="انٹریز تلاش کریں..." value="${esc(bankReportSearch)}" oninput="bankReportSearch=this.value; reFocus('bankReportSearchInput',this.selectionStart,()=>renderBankReport('${bankId}'))">
     <div class="grid2" style="margin-top:8px;">
       <div><label>پہلی تاریخ</label><input type="date" value="${bankReportFrom}" onchange="bankReportFrom=this.value; renderBankReport('${bankId}')"></div>
       <div><label>آخری تاریخ</label><input type="date" value="${bankReportTo}" onchange="bankReportTo=this.value; renderBankReport('${bankId}')"></div>
