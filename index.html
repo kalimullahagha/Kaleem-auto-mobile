@@ -297,6 +297,7 @@
 /* ===================== STATE / STORAGE ===================== */
 let DB = null;
 const STORAGE_KEY = 'kaleem_shop_data_v1';
+const DIRTY_KEY = 'kaleem_shop_data_v1_pending';
 
 function defaultDB(){
   return {
@@ -382,7 +383,16 @@ async function loadDB(){
   }
   let local=null;
   try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw) local=JSON.parse(raw); }catch(e){}
-  if(!loaded) loaded = local;
+  let hadPendingOffline=false;
+  try{ if(localStorage.getItem(DIRTY_KEY)==='1' && local){ hadPendingOffline=true; } }catch(e){}
+  if(hadPendingOffline){
+    // Some entries made while offline (or before a sync could finish) never
+    // reached the cloud — don't let an older cloud snapshot silently erase
+    // them. Keep the local copy and push it up right away.
+    loaded = local;
+  } else if(!loaded){
+    loaded = local;
+  }
   DB = loaded || defaultDB();
   DB.items=DB.items||[]; DB.customers=DB.customers||[]; DB.banks=DB.banks||[];
   DB.sales=DB.sales||[]; DB.purchases=DB.purchases||[]; DB.cashEntries=DB.cashEntries||[];
@@ -391,16 +401,18 @@ async function loadDB(){
   DB.amanatPersons=DB.amanatPersons||[]; DB.amanatEntries=DB.amanatEntries||[];
   DB.suppliers=DB.suppliers||[]; DB.supplierPayments=DB.supplierPayments||[];
   if(hasFirebase) startFBListener();
+  if(hadPendingOffline){ pendingSync=true; syncToCloudBackground(JSON.stringify(DB)); }
 }
 let formSubmitting=false;
 function lockSubmit(){ if(formSubmitting) return false; formSubmitting=true; return true; }
 function unlockSubmit(){ formSubmitting=false; }
 let cloudSyncQueued=false, cloudSyncTimer=null;
+let pendingSync=false, pendingRetryTimer=null;
 // Plain, synchronous function — NOT async, NO internal await. Guarantees the
 // local save (and anything after it in the caller) never waits on the network
 // or on a browser-throttled promise/microtask, even in odd connectivity states.
 function saveDB(){
-  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); localStorage.setItem(DIRTY_KEY, '1'); }catch(e){}
   const dbJson = JSON.stringify(DB);
   clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(function(){ syncToCloudBackground(dbJson); }, 0);
@@ -412,18 +424,42 @@ function withTimeout(promise, ms){
   ]);
 }
 async function syncToCloudBackground(dbJson){
+  let ok=true;
   if(hasFirebase){
     try{
       lastLocalWriteStamp = Date.now();
       await withTimeout(FB_DOC().set({ db: dbJson, updatedBy: deviceId, updatedAt: lastLocalWriteStamp }), 8000);
       cloudWorks=true;
-    }catch(e){ console.error('Firestore save failed/timed out', e); }
+    }catch(e){ console.error('Firestore save failed/timed out', e); ok=false; }
   }
   if(hasCloudStorage){
     try{ await withTimeout(window.storage.set(STORAGE_KEY, dbJson, false), 8000); cloudWorks=true; }
-    catch(e){}
+    catch(e){ ok=false; }
+  }
+  // If the upload failed (e.g. no internet at the time), don't just give up —
+  // keep the *latest* DB snapshot pending and keep retrying (on reconnect, on
+  // app becoming visible again, and periodically) until it actually goes through,
+  // instead of waiting for the user to make another edit.
+  if(!ok){
+    pendingSync=true;
+    scheduleRetrySync();
+  } else {
+    pendingSync=false;
+    try{ localStorage.removeItem(DIRTY_KEY); }catch(e){}
+    if(pendingRetryTimer){ clearTimeout(pendingRetryTimer); pendingRetryTimer=null; }
   }
 }
+function scheduleRetrySync(){
+  if(pendingRetryTimer) return;
+  pendingRetryTimer = setTimeout(function(){
+    pendingRetryTimer=null;
+    if(pendingSync) syncToCloudBackground(JSON.stringify(DB));
+  }, 15000);
+}
+try{
+  window.addEventListener('online', function(){ if(pendingSync) syncToCloudBackground(JSON.stringify(DB)); });
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible' && pendingSync) syncToCloudBackground(JSON.stringify(DB)); });
+}catch(e){}
 
 function downloadBackup(){
   const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
@@ -1074,12 +1110,15 @@ function printInvoice(saleId){
   window.print();
   setTimeout(()=>{document.getElementById('printArea').style.display='none';},500);
 }
-function waSendInvoice(saleId){
+async function waSendInvoice(saleId){
   const sale=DB.sales.find(s=>s.id===saleId);
   const c=custById(sale.customerId);
   const phone=c?c.phone:'';
   if(!phone){ toast('اس کسٹمر کا واٹس ایپ نمبر موجود نہیں'); return; }
   const text=`السلام علیکم ${c.name}، آپ کا بل نمبر ${sale.invoiceNo} کی رقم ${money(sale.netTotal)} روپے ہے۔ ${DB.shop.name}، شکریہ`;
+  if(navigator.share){
+    try{ await navigator.share({title:'بل — '+sale.invoiceNo, text}); return; }catch(e){ if(e && e.name==='AbortError') return; }
+  }
   window.open(waLink(phone,text),'_blank');
 }
 
@@ -3242,7 +3281,7 @@ function openSheet(title, bodyHTML){
       </div>
     </div>`;
 }
-function closeSheet(){ currentOverlayRefresh=null; document.getElementById('overlayRoot').innerHTML=''; }
+function closeSheet(){ currentOverlayRefresh=null; document.getElementById('overlayRoot').innerHTML=''; if(!isLocked()) render(); }
 
 /* Custom confirm dialog — replaces native confirm() which can be blocked
    inside sandboxed webviews (some file-preview/browser embeds silently
