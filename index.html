@@ -423,17 +423,105 @@ function withTimeout(promise, ms){
     new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')), ms))
   ]);
 }
+/* ---- Merge-before-push: never let a save wholesale-overwrite entries
+   another device already pushed to the cloud that this device doesn't
+   have yet (e.g. this device was offline, or two phones saved around
+   the same time). We fetch the current cloud copy, combine it with our
+   own DB record-by-record (by id), and push the combined result. ---- */
+function collectTombstones(trash){
+  const t = { items:new Set(), customers:new Set(), banks:new Set(), sales:new Set(),
+    purchases:new Set(), cashEntries:new Set(), bankEntries:new Set(), collections:new Set(),
+    amanatPersons:new Set(), amanatEntries:new Set(), suppliers:new Set() };
+  (trash||[]).forEach(function(tr){
+    if(!tr) return; const d=tr.data;
+    if(!d) return;
+    try{
+      if(tr.type==='item' && d.id) t.items.add(d.id);
+      else if(tr.type==='sale' && d.id) t.sales.add(d.id);
+      else if(tr.type==='purchase' && d.id) t.purchases.add(d.id);
+      else if(tr.type==='collection' && d.id) t.collections.add(d.id);
+      else if(tr.type==='amanatEntry' && d.id) t.amanatEntries.add(d.id);
+      else if(tr.type==='cash' && d.id) t.cashEntries.add(d.id);
+      else if(tr.type==='supplier' && d.id) t.suppliers.add(d.id);
+      else if(tr.type==='customer'){
+        if(d.customer && d.customer.id) t.customers.add(d.customer.id);
+        (d.sales||[]).forEach(function(s){ if(s&&s.id) t.sales.add(s.id); });
+        (d.collections||[]).forEach(function(c){ if(c&&c.id) t.collections.add(c.id); });
+      } else if(tr.type==='amanatPerson'){
+        if(d.person && d.person.id) t.amanatPersons.add(d.person.id);
+        (d.entries||[]).forEach(function(e){ if(e&&e.id) t.amanatEntries.add(e.id); });
+      } else if(tr.type==='bank'){
+        if(d.bank && d.bank.id) t.banks.add(d.bank.id);
+        (d.bankEntries||[]).forEach(function(e){ if(e&&e.id) t.bankEntries.add(e.id); });
+        (d.sales||[]).forEach(function(s){ if(s&&s.id) t.sales.add(s.id); });
+        (d.purchases||[]).forEach(function(p){ if(p&&p.id) t.purchases.add(p.id); });
+      }
+    }catch(e){}
+  });
+  return t;
+}
+function mergeArraysById(localArr, remoteArr, exclude){
+  const map=new Map();
+  (remoteArr||[]).forEach(function(r){ if(r && r.id && !(exclude&&exclude.has(r.id))) map.set(r.id, r); });
+  (localArr||[]).forEach(function(r){ if(r && r.id && !(exclude&&exclude.has(r.id))) map.set(r.id, r); });
+  return Array.from(map.values());
+}
+function mergeTrashArrays(localTrash, remoteTrash){
+  const map=new Map();
+  (remoteTrash||[]).forEach(function(t){ if(t && t.id) map.set(t.id, t); });
+  (localTrash||[]).forEach(function(t){ if(t && t.id) map.set(t.id, t); });
+  let merged=Array.from(map.values()).sort(function(a,b){ return (b.deletedAt||0)-(a.deletedAt||0); });
+  if(merged.length>200) merged.length=200;
+  return merged;
+}
+function mergeDB(localDB, remoteDB){
+  if(!remoteDB) return localDB;
+  const tombL=collectTombstones(localDB.trash), tombR=collectTombstones(remoteDB.trash);
+  const tomb={}; Object.keys(tombL).forEach(function(k){ tomb[k]=new Set([...tombL[k], ...tombR[k]]); });
+  return {
+    shop: localDB.shop || remoteDB.shop || defaultDB().shop,
+    items: mergeArraysById(localDB.items, remoteDB.items, tomb.items),
+    customers: mergeArraysById(localDB.customers, remoteDB.customers, tomb.customers),
+    banks: mergeArraysById(localDB.banks, remoteDB.banks, tomb.banks),
+    sales: mergeArraysById(localDB.sales, remoteDB.sales, tomb.sales),
+    purchases: mergeArraysById(localDB.purchases, remoteDB.purchases, tomb.purchases),
+    cashEntries: mergeArraysById(localDB.cashEntries, remoteDB.cashEntries, tomb.cashEntries),
+    bankEntries: mergeArraysById(localDB.bankEntries, remoteDB.bankEntries, tomb.bankEntries),
+    collections: mergeArraysById(localDB.collections, remoteDB.collections, tomb.collections),
+    amanatPersons: mergeArraysById(localDB.amanatPersons, remoteDB.amanatPersons, tomb.amanatPersons),
+    amanatEntries: mergeArraysById(localDB.amanatEntries, remoteDB.amanatEntries, tomb.amanatEntries),
+    suppliers: mergeArraysById(localDB.suppliers, remoteDB.suppliers, tomb.suppliers),
+    supplierPayments: mergeArraysById(localDB.supplierPayments, remoteDB.supplierPayments, new Set()),
+    trash: mergeTrashArrays(localDB.trash, remoteDB.trash),
+    invoiceCounter: Math.max(Number(localDB.invoiceCounter)||0, Number(remoteDB.invoiceCounter)||0)
+  };
+}
 async function syncToCloudBackground(dbJson){
   let ok=true;
   if(hasFirebase){
     try{
+      let remoteDB=null;
+      try{
+        const snap = await withTimeout(FB_DOC().get(), 6000);
+        if(snap.exists && snap.data().db){ remoteDB = JSON.parse(snap.data().db); }
+      }catch(e){ /* couldn't reach cloud right now — push local as-is, next sync will merge */ }
+      let toSend = dbJson;
+      if(remoteDB){
+        DB = mergeDB(DB, remoteDB);
+        try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
+        toSend = JSON.stringify(DB);
+        if(!isLocked()){
+          const overlayEmpty = !document.getElementById('overlayRoot') || !document.getElementById('overlayRoot').innerHTML.trim();
+          if(overlayEmpty){ render(); } else if(typeof currentOverlayRefresh==='function'){ currentOverlayRefresh(); }
+        }
+      }
       lastLocalWriteStamp = Date.now();
-      await withTimeout(FB_DOC().set({ db: dbJson, updatedBy: deviceId, updatedAt: lastLocalWriteStamp }), 8000);
+      await withTimeout(FB_DOC().set({ db: toSend, updatedBy: deviceId, updatedAt: lastLocalWriteStamp }), 8000);
       cloudWorks=true;
     }catch(e){ console.error('Firestore save failed/timed out', e); ok=false; }
   }
   if(hasCloudStorage){
-    try{ await withTimeout(window.storage.set(STORAGE_KEY, dbJson, false), 8000); cloudWorks=true; }
+    try{ await withTimeout(window.storage.set(STORAGE_KEY, JSON.stringify(DB), false), 8000); cloudWorks=true; }
     catch(e){ ok=false; }
   }
   // If the upload failed (e.g. no internet at the time), don't just give up —
