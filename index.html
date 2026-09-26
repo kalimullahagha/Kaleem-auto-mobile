@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-09-26-v2</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-09-26-v3</div>
   </header>
 
   <main id="main"></main>
@@ -356,7 +356,7 @@ function startFBListener(){
       remote.amanatPersons=remote.amanatPersons||[]; remote.amanatEntries=remote.amanatEntries||[];
       remote.suppliers=remote.suppliers||[]; remote.supplierPayments=remote.supplierPayments||[];
       remote.shop=remote.shop||defaultDB().shop;
-      DB=remote;
+      DB = mergeDB(DB, remote);
       try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
       cloudWorks=true;
       const overlayEmpty = !document.getElementById('overlayRoot') || !document.getElementById('overlayRoot').innerHTML.trim();
@@ -500,23 +500,29 @@ async function syncToCloudBackground(dbJson){
   let ok=true;
   if(hasFirebase){
     try{
-      let remoteDB=null;
-      try{
-        const snap = await withTimeout(FB_DOC().get(), 6000);
-        if(snap.exists && snap.data().db){ remoteDB = JSON.parse(snap.data().db); }
-      }catch(e){ /* couldn't reach cloud right now — push local as-is, next sync will merge */ }
-      let toSend = dbJson;
-      if(remoteDB){
-        DB = mergeDB(DB, remoteDB);
-        try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
-        toSend = JSON.stringify(DB);
-        if(!isLocked()){
-          const overlayEmpty = !document.getElementById('overlayRoot') || !document.getElementById('overlayRoot').innerHTML.trim();
-          if(overlayEmpty){ render(); } else if(typeof currentOverlayRefresh==='function'){ currentOverlayRefresh(); }
+      let mergedRemote=false;
+      await withTimeout(fbDb.runTransaction(async function(t){
+        const snap = await t.get(FB_DOC());
+        let remoteDB=null;
+        if(snap.exists && snap.data() && snap.data().db){
+          try{ remoteDB = JSON.parse(snap.data().db); }catch(e){}
         }
+        let toSend;
+        if(remoteDB){
+          DB = mergeDB(DB, remoteDB);
+          toSend = JSON.stringify(DB);
+          mergedRemote = true;
+        } else {
+          toSend = dbJson;
+        }
+        lastLocalWriteStamp = Date.now();
+        t.set(FB_DOC(), { db: toSend, updatedBy: deviceId, updatedAt: lastLocalWriteStamp });
+      }), 15000);
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
+      if(mergedRemote && !isLocked()){
+        const overlayEmpty = !document.getElementById('overlayRoot') || !document.getElementById('overlayRoot').innerHTML.trim();
+        if(overlayEmpty){ render(); } else if(typeof currentOverlayRefresh==='function'){ currentOverlayRefresh(); }
       }
-      lastLocalWriteStamp = Date.now();
-      await withTimeout(FB_DOC().set({ db: toSend, updatedBy: deviceId, updatedAt: lastLocalWriteStamp }), 8000);
       cloudWorks=true;
     }catch(e){ console.error('Firestore save failed/timed out', e); ok=false; }
   }
