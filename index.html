@@ -272,7 +272,8 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-09-26-v3</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-09-26-v4</div>
+    <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
   <main id="main"></main>
@@ -312,6 +313,25 @@ function defaultDB(){
 
 const hasCloudStorage = (typeof window.storage !== 'undefined' && window.storage && typeof window.storage.get === 'function');
 let cloudWorks = false;
+function updateCloudStatusUI(){
+  const el=document.getElementById('cloudStatusLine');
+  if(!el) return;
+  let pending=false;
+  try{ pending = localStorage.getItem(DIRTY_KEY)==='1'; }catch(e){}
+  let text, color;
+  if(!hasFirebase && !hasCloudStorage){
+    text='⚠️ کلاؤڈ سے رابطہ نہیں — صرف اسی موبائل میں محفوظ'; color='#ffb74d';
+  } else if(pending){
+    text='🔄 اپ لوڈ ہو رہا ہے...'; color='#ffd54f';
+  } else if(cloudWorks){
+    text='☁️ کلاؤڈ سے منسلک — تازہ ترین'; color='#a5d6a7';
+  } else {
+    text='⏳ کلاؤڈ سے رابطہ کی کوشش جاری...'; color='rgba(255,255,255,.55)';
+  }
+  el.textContent=text;
+  el.style.color=color;
+}
+setInterval(updateCloudStatusUI, 3000);
 
 /* ---- Firebase (live cross-device sync) ---- */
 const firebaseConfig = {
