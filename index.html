@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-01-v6</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-01-v7</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -323,7 +323,7 @@ function updateCloudStatusUI(){
   if(!hasFirebase && !hasCloudStorage){
     text='⚠️ کلاؤڈ سے رابطہ نہیں — صرف اسی موبائل میں محفوظ'; color='#ffb74d';
   } else if(pending && lastSyncError.indexOf('DATA_TOO_LARGE')===0){
-    text='🛑 ڈیٹا بہت زیادہ ہو گیا ہے، اپ لوڈ رک گیا ہے — سپورٹ سے رابطہ کریں'; color='#ff8a65';
+    text='🛑 بہت بڑا حصہ: '+lastSyncError.split(':')[1]+' — سپورٹ سے رابطہ کریں'; color='#ff8a65';
   } else if(pending && lastSyncError){
     text='⚠️ اپ لوڈ ناکام: '+lastSyncError.slice(0,60); color='#ff8a65';
   } else if(pending){
