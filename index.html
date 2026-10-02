@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-01-v8</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-02-v9</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -439,7 +439,7 @@ async function loadDB(){
   let loaded=null;
   if(hasFirebase){
     try{
-      loaded = await withTimeout(fetchRemoteFromFirestoreParts(), 10000);
+      loaded = await withTimeout(fetchRemoteFromFirestoreParts(), 20000);
       if(loaded) cloudWorks=true;
     }catch(e){ console.error('Firestore load failed/timed out', e); }
   }
@@ -566,6 +566,7 @@ function mergeDB(localDB, remoteDB){
 }
 async function syncToCloudBackground(dbJson){
   let ok=true;
+  lastSyncError='';
   if(hasFirebase){
     try{
       await withTimeout(fbDb.runTransaction(async function(t){
@@ -622,7 +623,7 @@ async function syncToCloudBackground(dbJson){
         });
         t.set(photosRef, { data: photosJson });
         t.set(metaRef, { shop: DB.shop, invoiceCounter: DB.invoiceCounter, updatedBy: deviceId, updatedAt: lastLocalWriteStamp, migrated: true });
-      }), 25000);
+      }), 45000);
       try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
       if(!isLocked()){
         const overlayEmpty = !document.getElementById('overlayRoot') || !document.getElementById('overlayRoot').innerHTML.trim();
@@ -758,6 +759,8 @@ function bankBalance(bankId){
   DB.bankEntries.forEach(e=>{ if(e.bankId===bankId) bal += (Number(e.in)||0)-(Number(e.out)||0); });
   DB.sales.forEach(s=>{ if(s.paymentType==='بینک' && s.bankId===bankId) bal += s.netTotal; });
   DB.purchases.forEach(p=>{ if(p.paymentType==='بینک' && p.bankId===bankId) bal -= p.total; });
+  DB.collections.forEach(x=>{ if(x.paymentType==='بینک' && x.bankId===bankId) bal += (x.type==='given' ? -(Number(x.amount)||0) : (Number(x.amount)||0)); });
+  (DB.amanatEntries||[]).forEach(x=>{ if(x.paymentType==='بینک' && x.bankId===bankId) bal += (x.type==='in' ? (Number(x.amount)||0) : -(Number(x.amount)||0)); });
   return bal;
 }
 function totalBankBalance(){ return DB.banks.reduce((a,b)=>a+bankBalance(b.id),0); }
