@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-09-26-v5</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-01-v6</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -357,6 +357,27 @@ try{
   }
 }catch(e){ console.error('Firebase init failed', e); }
 function FB_DOC(){ return fbDb.collection('shops').doc('main'); }
+const PART_KEYS = ['items','customers','banks','sales','purchases','cashEntries','bankEntries','collections','amanatPersons','amanatEntries','suppliers','supplierPayments','trash'];
+function PARTS_COL(){ return FB_DOC().collection('parts'); }
+async function fetchRemoteFromFirestoreParts(){
+  const metaSnap = await FB_DOC().get();
+  let meta = metaSnap.exists ? metaSnap.data() : null;
+  const partsSnap = await PARTS_COL().get();
+  const result = {};
+  let gotAnyPart=false;
+  partsSnap.forEach(function(d){
+    gotAnyPart=true;
+    try{ result[d.id] = JSON.parse((d.data()&&d.data().data)||'[]'); }catch(e){ result[d.id]=[]; }
+  });
+  if(!gotAnyPart && meta && meta.db){
+    // legacy single-document format from before the split — still readable
+    try{ Object.assign(result, JSON.parse(meta.db)); }catch(e){}
+  }
+  if(!gotAnyPart && !(meta && meta.db)) return null;
+  result.shop = (meta && meta.shop) || defaultDB().shop;
+  result.invoiceCounter = (meta && meta.invoiceCounter) || 0;
+  return result;
+}
 const deviceId = (function(){
   let id=null;
   try{ id = localStorage.getItem('kaleem_device_id'); }catch(e){}
@@ -367,13 +388,14 @@ let lastLocalWriteStamp=0;
 let currentOverlayRefresh=null;
 function startFBListener(){
   if(unsubscribeFB || !hasFirebase) return;
-  unsubscribeFB = FB_DOC().onSnapshot(function(snap){
+  unsubscribeFB = FB_DOC().onSnapshot(async function(snap){
     if(!snap.exists) return;
     const data=snap.data();
-    if(!data || !data.db) return;
+    if(!data) return;
     if(data.updatedBy===deviceId && data.updatedAt===lastLocalWriteStamp) return;
     try{
-      const remote=JSON.parse(data.db);
+      const remote = await fetchRemoteFromFirestoreParts();
+      if(!remote) return;
       remote.items=remote.items||[]; remote.customers=remote.customers||[]; remote.banks=remote.banks||[];
       remote.sales=remote.sales||[]; remote.purchases=remote.purchases||[]; remote.cashEntries=remote.cashEntries||[];
       remote.bankEntries=remote.bankEntries||[]; remote.collections=remote.collections||[]; remote.invoiceCounter=remote.invoiceCounter||0;
@@ -396,8 +418,8 @@ async function loadDB(){
   let loaded=null;
   if(hasFirebase){
     try{
-      const snap = await withTimeout(FB_DOC().get(), 6000);
-      if(snap.exists && snap.data().db){ loaded=JSON.parse(snap.data().db); cloudWorks=true; }
+      loaded = await withTimeout(fetchRemoteFromFirestoreParts(), 10000);
+      if(loaded) cloudWorks=true;
     }catch(e){ console.error('Firestore load failed/timed out', e); }
   }
   if(!loaded && hasCloudStorage){
@@ -525,29 +547,39 @@ async function syncToCloudBackground(dbJson){
   let ok=true;
   if(hasFirebase){
     try{
-      let mergedRemote=false;
       await withTimeout(fbDb.runTransaction(async function(t){
-        const snap = await t.get(FB_DOC());
-        let remoteDB=null;
-        if(snap.exists && snap.data() && snap.data().db){
-          try{ remoteDB = JSON.parse(snap.data().db); }catch(e){}
+        const metaRef = FB_DOC();
+        const partRefs = {}; PART_KEYS.forEach(function(k){ partRefs[k]=PARTS_COL().doc(k); });
+        const metaSnap = await t.get(metaRef);
+        const partSnapList = await Promise.all(PART_KEYS.map(function(k){ return t.get(partRefs[k]); }));
+        const remoteDB = {}; let gotAnyPart=false;
+        PART_KEYS.forEach(function(k,i){
+          const snap=partSnapList[i];
+          if(snap.exists && snap.data() && snap.data().data!==undefined){
+            gotAnyPart=true;
+            try{ remoteDB[k]=JSON.parse(snap.data().data); }catch(e){ remoteDB[k]=[]; }
+          } else { remoteDB[k]=[]; }
+        });
+        const meta = metaSnap.exists ? metaSnap.data() : null;
+        if(!gotAnyPart && meta && meta.db){
+          try{ Object.assign(remoteDB, JSON.parse(meta.db)); }catch(e){}
         }
-        let toSend;
-        if(remoteDB){
-          DB = mergeDB(DB, remoteDB);
-          toSend = JSON.stringify(DB);
-          mergedRemote = true;
-        } else {
-          toSend = dbJson;
-        }
-        if(toSend.length > 900000){
-          throw new Error('DATA_TOO_LARGE:'+toSend.length);
-        }
+        remoteDB.shop = (meta&&meta.shop) || defaultDB().shop;
+        remoteDB.invoiceCounter = (meta&&meta.invoiceCounter) || 0;
+        DB = mergeDB(DB, remoteDB);
+        let oversizedPart=null;
+        PART_KEYS.forEach(function(k){
+          if(JSON.stringify(DB[k]||[]).length > 900000) oversizedPart=k;
+        });
+        if(oversizedPart) throw new Error('DATA_TOO_LARGE:'+oversizedPart);
         lastLocalWriteStamp = Date.now();
-        t.set(FB_DOC(), { db: toSend, updatedBy: deviceId, updatedAt: lastLocalWriteStamp });
-      }), 15000);
+        PART_KEYS.forEach(function(k){
+          t.set(partRefs[k], { data: JSON.stringify(DB[k]||[]) });
+        });
+        t.set(metaRef, { shop: DB.shop, invoiceCounter: DB.invoiceCounter, updatedBy: deviceId, updatedAt: lastLocalWriteStamp, migrated: true });
+      }), 25000);
       try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
-      if(mergedRemote && !isLocked()){
+      if(!isLocked()){
         const overlayEmpty = !document.getElementById('overlayRoot') || !document.getElementById('overlayRoot').innerHTML.trim();
         if(overlayEmpty){ render(); } else if(typeof currentOverlayRefresh==='function'){ currentOverlayRefresh(); }
       }
