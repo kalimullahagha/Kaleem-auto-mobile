@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-01-v7</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-01-v8</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -324,6 +324,8 @@ function updateCloudStatusUI(){
     text='⚠️ کلاؤڈ سے رابطہ نہیں — صرف اسی موبائل میں محفوظ'; color='#ffb74d';
   } else if(pending && lastSyncError.indexOf('DATA_TOO_LARGE')===0){
     text='🛑 بہت بڑا حصہ: '+lastSyncError.split(':')[1]+' — سپورٹ سے رابطہ کریں'; color='#ff8a65';
+  } else if(!pending && lastSyncError==='PHOTOS_TRIMMED'){
+    text='☁️ منسلک — کچھ پرانی آئٹم تصاویر جگہ کی کمی سے کلاؤڈ پر محفوظ نہیں ہوئیں'; color='#ffd54f';
   } else if(pending && lastSyncError){
     text='⚠️ اپ لوڈ ناکام: '+lastSyncError.slice(0,60); color='#ff8a65';
   } else if(pending){
@@ -359,6 +361,22 @@ try{
 function FB_DOC(){ return fbDb.collection('shops').doc('main'); }
 const PART_KEYS = ['items','customers','banks','sales','purchases','cashEntries','bankEntries','collections','amanatPersons','amanatEntries','suppliers','supplierPayments','trash'];
 function PARTS_COL(){ return FB_DOC().collection('parts'); }
+const ITEM_PHOTOS_PART_ID = 'itemPhotos';
+function stripItemPhotosForTransport(items){
+  const photoMap = {};
+  const stripped = (items||[]).map(function(it){
+    if(it && it.photo){ photoMap[it.id]=it.photo; const copy=Object.assign({},it); delete copy.photo; return copy; }
+    return it;
+  });
+  return [stripped, photoMap];
+}
+function reattachItemPhotos(items, photoMap){
+  if(!photoMap) return items;
+  return (items||[]).map(function(it){
+    if(it && photoMap[it.id]!==undefined){ return Object.assign({}, it, {photo: photoMap[it.id]}); }
+    return it;
+  });
+}
 async function fetchRemoteFromFirestoreParts(){
   const metaSnap = await FB_DOC().get();
   let meta = metaSnap.exists ? metaSnap.data() : null;
@@ -376,6 +394,9 @@ async function fetchRemoteFromFirestoreParts(){
   if(!gotAnyPart && !(meta && meta.db)) return null;
   result.shop = (meta && meta.shop) || defaultDB().shop;
   result.invoiceCounter = (meta && meta.invoiceCounter) || 0;
+  if(result[ITEM_PHOTOS_PART_ID]){
+    result.items = reattachItemPhotos(result.items, result[ITEM_PHOTOS_PART_ID]);
+  }
   return result;
 }
 const deviceId = (function(){
@@ -550,8 +571,10 @@ async function syncToCloudBackground(dbJson){
       await withTimeout(fbDb.runTransaction(async function(t){
         const metaRef = FB_DOC();
         const partRefs = {}; PART_KEYS.forEach(function(k){ partRefs[k]=PARTS_COL().doc(k); });
+        const photosRef = PARTS_COL().doc(ITEM_PHOTOS_PART_ID);
         const metaSnap = await t.get(metaRef);
         const partSnapList = await Promise.all(PART_KEYS.map(function(k){ return t.get(partRefs[k]); }));
+        const photosSnap = await t.get(photosRef);
         const remoteDB = {}; let gotAnyPart=false;
         PART_KEYS.forEach(function(k,i){
           const snap=partSnapList[i];
@@ -560,22 +583,44 @@ async function syncToCloudBackground(dbJson){
             try{ remoteDB[k]=JSON.parse(snap.data().data); }catch(e){ remoteDB[k]=[]; }
           } else { remoteDB[k]=[]; }
         });
+        let remotePhotoMap={};
+        if(photosSnap.exists && photosSnap.data() && photosSnap.data().data!==undefined){
+          try{ remotePhotoMap=JSON.parse(photosSnap.data().data)||{}; }catch(e){ remotePhotoMap={}; }
+        }
         const meta = metaSnap.exists ? metaSnap.data() : null;
         if(!gotAnyPart && meta && meta.db){
           try{ Object.assign(remoteDB, JSON.parse(meta.db)); }catch(e){}
         }
         remoteDB.shop = (meta&&meta.shop) || defaultDB().shop;
         remoteDB.invoiceCounter = (meta&&meta.invoiceCounter) || 0;
+        remoteDB.items = reattachItemPhotos(remoteDB.items, remotePhotoMap);
         DB = mergeDB(DB, remoteDB);
+        let [strippedItems, photoMap] = stripItemPhotosForTransport(DB.items);
+        // If the photo map alone is still too big, drop the largest photos
+        // (oldest-first isn't tracked, so largest-first keeps the most items
+        // with a photo) until it fits — a cosmetic loss, never a data loss.
+        let photosJson = JSON.stringify(photoMap);
+        if(photosJson.length > 900000){
+          const ids = Object.keys(photoMap).sort(function(a,b){ return (photoMap[b]||'').length-(photoMap[a]||'').length; });
+          for(const id of ids){
+            delete photoMap[id];
+            photosJson = JSON.stringify(photoMap);
+            if(photosJson.length <= 900000) break;
+          }
+          lastSyncError = 'PHOTOS_TRIMMED';
+        }
         let oversizedPart=null;
         PART_KEYS.forEach(function(k){
-          if(JSON.stringify(DB[k]||[]).length > 900000) oversizedPart=k;
+          const arr = k==='items' ? strippedItems : (DB[k]||[]);
+          if(JSON.stringify(arr).length > 900000) oversizedPart=k;
         });
         if(oversizedPart) throw new Error('DATA_TOO_LARGE:'+oversizedPart);
         lastLocalWriteStamp = Date.now();
         PART_KEYS.forEach(function(k){
-          t.set(partRefs[k], { data: JSON.stringify(DB[k]||[]) });
+          const arr = k==='items' ? strippedItems : (DB[k]||[]);
+          t.set(partRefs[k], { data: JSON.stringify(arr) });
         });
+        t.set(photosRef, { data: photosJson });
         t.set(metaRef, { shop: DB.shop, invoiceCounter: DB.invoiceCounter, updatedBy: deviceId, updatedAt: lastLocalWriteStamp, migrated: true });
       }), 25000);
       try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
@@ -584,7 +629,7 @@ async function syncToCloudBackground(dbJson){
         if(overlayEmpty){ render(); } else if(typeof currentOverlayRefresh==='function'){ currentOverlayRefresh(); }
       }
       cloudWorks=true;
-      lastSyncError='';
+      if(lastSyncError!=='PHOTOS_TRIMMED') lastSyncError='';
     }catch(e){
       lastSyncError = (e && (e.code || e.message)) ? ((e.code?e.code+': ':'')+(e.message||'')) : String(e);
       console.error('Firestore save failed/timed out', e);
