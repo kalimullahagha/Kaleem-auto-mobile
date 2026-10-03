@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-02-v10</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-03-v11</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -816,6 +816,8 @@ function cashBalance(){
   DB.cashEntries.forEach(e=>{ bal += (Number(e.in)||0) - (Number(e.out)||0); });
   DB.sales.forEach(s=>{ if(s.paymentType==='نقد') bal += s.netTotal; });
   DB.purchases.forEach(p=>{ if(p.paymentType==='نقد') bal -= p.total; });
+  (DB.collections||[]).forEach(x=>{ if(x.paymentType==='نقد'){ const a=Number(x.amount)||0; bal += (x.type==='given' ? -a : a); } });
+  (DB.amanatEntries||[]).forEach(x=>{ if(x.paymentType==='نقد'){ const a=Number(x.amount)||0; bal += (x.type==='in' ? a : -a); } });
   return bal;
 }
 function bankBalance(bankId){
@@ -921,22 +923,37 @@ function kpBackspace(){
   kpBuffer = kpBuffer.length>1 ? kpBuffer.slice(0,-1) : '0';
   kpRenderDisplay();
 }
+/* shared fast image compressor (createObjectURL, no giant base64 first) */
+function compressImageFile(file, maxW, cb){
+  toast('تصویر تیار ہو رہی ہے...');
+  const url=URL.createObjectURL(file);
+  const img=new Image();
+  let done=false;
+  const fail=function(){ if(done) return; done=true; URL.revokeObjectURL(url); toast('تصویر نہیں لی جا سکی، دوبارہ کوشش کریں'); };
+  const timer=setTimeout(fail,20000);
+  img.onload=function(){
+    if(done) return; done=true; clearTimeout(timer);
+    try{
+      const scale=Math.min(1,maxW/img.width);
+      const cv=document.createElement('canvas');
+      cv.width=Math.max(1,Math.round(img.width*scale)); cv.height=Math.max(1,Math.round(img.height*scale));
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+      const data=cv.toDataURL('image/jpeg',0.6);
+      URL.revokeObjectURL(url);
+      cb(data);
+    }catch(e){ URL.revokeObjectURL(url); toast('تصویر نہیں لی جا سکی، دوبارہ کوشش کریں'); }
+  };
+  img.onerror=function(){ clearTimeout(timer); fail(); };
+  img.src=url;
+}
 function captureColBillPhoto(input){
   const file=input.files[0]; if(!file) return;
-  const reader=new FileReader();
-  reader.onload=function(e){
-    const img=new Image();
-    img.onload=function(){
-      const maxW=800; const scale=Math.min(1,maxW/img.width);
-      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
-      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-      colBillImage=cv.toDataURL('image/jpeg',0.6);
-      const wrap=document.getElementById('col_photowrap');
-      if(wrap) wrap.innerHTML = colBillImagePreviewHtml();
-    };
-    img.src=e.target.result;
-  };
-  reader.readAsDataURL(file);
+  compressImageFile(file,800,function(data){
+    colBillImage=data;
+    const wrap=document.getElementById('col_photowrap');
+    if(wrap) wrap.innerHTML = colBillImagePreviewHtml();
+  });
+  input.value='';
 }
 function colBillImagePreviewHtml(){
   return colBillImage
@@ -1106,19 +1123,11 @@ function clearSignature(){
 }
 function capturePOSBillPhoto(input){
   const file=input.files[0]; if(!file) return;
-  const reader=new FileReader();
-  reader.onload=function(e){
-    const img=new Image();
-    img.onload=function(){
-      const maxW=800; const scale=Math.min(1,maxW/img.width);
-      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
-      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-      posBillImage=cv.toDataURL('image/jpeg',0.6);
-      renderPOS(document.getElementById('main'));
-    };
-    img.src=e.target.result;
-  };
-  reader.readAsDataURL(file);
+  compressImageFile(file,800,function(data){
+    posBillImage=data;
+    renderPOS(document.getElementById('main'));
+  });
+  input.value='';
 }
 function cartHTML(){
   if(!cart.length) return `<div class="empty"><div class="ic">🛒</div>ابھی کارٹ خالی ہے</div>`;
@@ -1640,20 +1649,12 @@ function itemPhotoWrapHtml(){
 }
 function captureItemPhoto(input){
   const file=input.files[0]; if(!file) return;
-  const reader=new FileReader();
-  reader.onload=function(e){
-    const img=new Image();
-    img.onload=function(){
-      const maxW=500; const scale=Math.min(1,maxW/img.width);
-      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
-      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-      itemFormPhoto=cv.toDataURL('image/jpeg',0.6);
-      const wrap=document.getElementById('f_photo_wrap');
-      if(wrap) wrap.innerHTML=itemPhotoWrapHtml();
-    };
-    img.src=e.target.result;
-  };
-  reader.readAsDataURL(file);
+  compressImageFile(file,500,function(data){
+    itemFormPhoto=data;
+    const wrap=document.getElementById('f_photo_wrap');
+    if(wrap) wrap.innerHTML=itemPhotoWrapHtml();
+  });
+  input.value='';
 }
 async function saveItem(id){
   if(!lockSubmit()) return;
@@ -2265,19 +2266,11 @@ function amPhotoWrapHtml(){
 }
 function captureAmPhoto(input){
   const file=input.files[0]; if(!file) return;
-  const reader=new FileReader();
-  reader.onload=function(e){
-    const img=new Image();
-    img.onload=function(){
-      const maxW=700; const scale=Math.min(1,maxW/img.width);
-      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
-      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-      amPhoto=cv.toDataURL('image/jpeg',0.6);
-      const wrap=document.getElementById('am_photo_wrap'); if(wrap) wrap.innerHTML=amPhotoWrapHtml();
-    };
-    img.src=e.target.result;
-  };
-  reader.readAsDataURL(file);
+  compressImageFile(file,700,function(data){
+    amPhoto=data;
+    const wrap=document.getElementById('am_photo_wrap'); if(wrap) wrap.innerHTML=amPhotoWrapHtml();
+  });
+  input.value='';
 }
 function initAmSignaturePad(){
   const canvas=document.getElementById('amSigPad');
@@ -3204,6 +3197,14 @@ async function deleteLedgerEntry(kind,id){
     const purchase=DB.purchases.find(p=>p.id===id);
     if(purchase){ trashPut('purchase','خریداری: '+purchaseItemsLabel(purchase), purchase); reverseStockForPurchase(purchase); }
     DB.purchases=DB.purchases.filter(p=>p.id!==id);
+  } else if(kind==='collection'){
+    const col=DB.collections.find(x=>x.id===id);
+    if(col) trashPut('collection', 'وصولی: '+money(col.amount), col);
+    DB.collections=DB.collections.filter(x=>x.id!==id);
+  } else if(kind==='amanat'){
+    const am=DB.amanatEntries.find(x=>x.id===id);
+    if(am) trashPut('amanatEntry', 'امانت انٹری: '+money(am.amount), am);
+    DB.amanatEntries=DB.amanatEntries.filter(x=>x.id!==id);
   }
   await saveDB(); renderCash(document.getElementById('main')); toast('انٹری حذف ہو گئی (ری سائیکل بن میں محفوظ)');
 }
@@ -3447,19 +3448,11 @@ function bePhotoWrapHtml(){
 }
 function captureBePhoto(input){
   const file=input.files[0]; if(!file) return;
-  const reader=new FileReader();
-  reader.onload=function(e){
-    const img=new Image();
-    img.onload=function(){
-      const maxW=700; const scale=Math.min(1,maxW/img.width);
-      const cv=document.createElement('canvas'); cv.width=img.width*scale; cv.height=img.height*scale;
-      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-      bePhoto=cv.toDataURL('image/jpeg',0.6);
-      const wrap=document.getElementById('be_photo_wrap'); if(wrap) wrap.innerHTML=bePhotoWrapHtml();
-    };
-    img.src=e.target.result;
-  };
-  reader.readAsDataURL(file);
+  compressImageFile(file,700,function(data){
+    bePhoto=data;
+    const wrap=document.getElementById('be_photo_wrap'); if(wrap) wrap.innerHTML=bePhotoWrapHtml();
+  });
+  input.value='';
 }
 function setBankType(t){
   document.getElementById('be_type').value=t;
