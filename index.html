@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-03-v11</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-03-v12</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -546,6 +546,7 @@ function collectTombstones(trash){
       else if(tr.type==='collection' && d.id) t.collections.add(d.id);
       else if(tr.type==='amanatEntry' && d.id) t.amanatEntries.add(d.id);
       else if(tr.type==='cash' && d.id) t.cashEntries.add(d.id);
+      else if(tr.type==='bankEntry' && d.id) t.bankEntries.add(d.id);
       else if(tr.type==='supplier' && d.id) t.suppliers.add(d.id);
       else if(tr.type==='customer'){
         if(d.customer && d.customer.id) t.customers.add(d.customer.id);
@@ -2385,6 +2386,8 @@ async function restoreFromTrash(trashId){
     DB.collections.push(d);
   } else if(t.type==='cash'){
     DB.cashEntries.push(d);
+  } else if(t.type==='bankEntry'){
+    DB.bankEntries.push(d);
   } else if(t.type==='purchase'){
     DB.purchases.push(d);
     applyStockForPurchase(d);
@@ -3407,17 +3410,27 @@ async function deleteBank(bankId){
 async function deleteBankLedgerEntry(kind,id,bankId){
   if(!(await customConfirm('یہ انٹری حذف کرنا چاہتے ہیں؟'))) return;
   if(kind==='bankEntry'){
+    const e=DB.bankEntries.find(x=>x.id===id);
+    if(e) trashPut('bankEntry', 'بینک: '+(e.desc||'')+' '+money(e.in||e.out), e);
     DB.bankEntries=DB.bankEntries.filter(e=>e.id!==id);
   } else if(kind==='sale'){
     const sale=DB.sales.find(s=>s.id===id);
-    if(sale){ (sale.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); }
+    if(sale){ trashPut('sale','بل: '+sale.invoiceNo, sale); (sale.items||[]).forEach(it=>{ const item=itemById(it.itemId); if(item) item.stock=(Number(item.stock)||0)+Number(it.qty||0); }); }
     DB.sales=DB.sales.filter(s=>s.id!==id);
   } else if(kind==='purchase'){
     const purchase=DB.purchases.find(p=>p.id===id);
-    if(purchase){ reverseStockForPurchase(purchase); }
+    if(purchase){ trashPut('purchase','خریداری: '+purchaseItemsLabel(purchase), purchase); reverseStockForPurchase(purchase); }
     DB.purchases=DB.purchases.filter(p=>p.id!==id);
+  } else if(kind==='collection'){
+    const col=DB.collections.find(x=>x.id===id);
+    if(col) trashPut('collection', 'وصولی: '+money(col.amount), col);
+    DB.collections=DB.collections.filter(x=>x.id!==id);
+  } else if(kind==='amanat'){
+    const am=DB.amanatEntries.find(x=>x.id===id);
+    if(am) trashPut('amanatEntry', 'امانت انٹری: '+money(am.amount), am);
+    DB.amanatEntries=DB.amanatEntries.filter(x=>x.id!==id);
   }
-  await saveDB(); openBankDetail(bankId); toast('انٹری حذف ہو گئی');
+  await saveDB(); openBankDetail(bankId); toast('انٹری حذف ہو گئی (ری سائیکل بن میں محفوظ)');
 }
 let bePhoto=null;
 function openBankEntryForm(bankId,entryId){
