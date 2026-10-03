@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-03-v13</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-03-v14</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -970,18 +970,40 @@ function colBillImagePreviewHtml(){
          <input type="file" accept="image/*" style="display:none;" onchange="captureColBillPhoto(this)">
        </label>`;
 }
+/* ---- searchable customer picker for POS ---- */
+function posCustLabel(){ const c=posCustomerId?custById(posCustomerId):null; return c?c.name:'— واک اِن گاہک (بغیر نام) —'; }
+function posCustRefreshBtn(){ const t=document.getElementById('posCustBtnTxt'); if(t) t.textContent=posCustLabel(); }
+function normSearch(x){ return String(x||'').toLowerCase().replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/ە/g,'ہ').replace(/ۃ/g,'ہ').replace(/\s+/g,' ').trim(); }
+function posCustListHTML(q){
+  q=normSearch(q);
+  const rows=DB.customers.filter(c=>!q || normSearch(c.name).includes(q) || normSearch(c.phone).includes(q));
+  const sel=function(on){ return `<span style="width:20px;height:20px;border-radius:50%;border:2px solid ${on?'var(--navy,#1c3f61)':'#b5b5b5'};display:inline-block;background:${on?'radial-gradient(circle,var(--navy,#1c3f61) 45%,#fff 50%)':'#fff'};flex:none;"></span>`; };
+  let h='';
+  if(!q) h+=`<div class="list-item" onclick="pickPosCust('')"><div class="name">— واک اِن گاہک (بغیر نام) —</div>${sel(!posCustomerId)}</div>`;
+  h+=rows.map(c=>`<div class="list-item" onclick="pickPosCust('${c.id}')"><div><div class="name">${esc(c.name)}</div>${c.phone?`<div class="meta">${esc(c.phone)}</div>`:''}</div>${sel(posCustomerId===c.id)}</div>`).join('');
+  if(q && !rows.length) h+='<div class="empty">کوئی کسٹمر نہیں ملا</div>';
+  return h;
+}
+function openPosCustPicker(){
+  openSheet('کسٹمر چنیں', `<input type="text" id="pcs_q" placeholder="🔍 نام یا نمبر سے تلاش کریں" oninput="document.getElementById('pcs_list').innerHTML=posCustListHTML(this.value)" autocomplete="off">
+    <div id="pcs_list" style="margin-top:8px;">${posCustListHTML('')}</div>`);
+  setTimeout(function(){ const i=document.getElementById('pcs_q'); if(i) i.focus(); },150);
+}
+function pickPosCust(id){
+  posCustomerId=id||null;
+  if(id) posQuickName='';
+  closeSheet();
+}
 function renderPOS(main){
   main.innerHTML = `
     ${editingSaleId?`<div class="card" style="background:#fff7e6;border:1px solid #f0c36d;"><b>✏️ بل میں ترمیم ہو رہی ہے</b> — محفوظ کرنے پر پرانا بل اپڈیٹ ہو جائے گا۔ <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="cancelEditSale()">❌ ترمیم منسوخ کریں</button></div>`:''}
     <div class="card">
       <label>کسٹمر</label>
-      <select id="posCust" onchange="posCustomerId=this.value; if(posCustomerId){posQuickName=''; document.getElementById('posQuickNameInput').value='';}">
-        <option value="">— واک اِن گاہک (بغیر نام) —</option>
-        ${DB.customers.map(c=>`<option value="${c.id}" ${posCustomerId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
-      </select>
+      <input type="hidden" id="posCust" value="${posCustomerId||''}">
+      <button type="button" id="posCustBtn" class="btn btn-outline" style="display:flex;justify-content:space-between;align-items:center;text-align:right;" onclick="openPosCustPicker()"><span id="posCustBtnTxt">${esc(posCustLabel())}</span><span>🔍 ▾</span></button>
       <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="openCustomerForm(true)">+ نیا کسٹمر شامل کریں</button>
       <label style="margin-top:8px;">یا فوری نام لکھیں (بغیر کسٹمر لسٹ میں شامل کیے)</label>
-      <input type="text" id="posQuickNameInput" placeholder="مثلاً: راشد بھائی" value="${esc(posQuickName||'')}" oninput="posQuickName=this.value; if(this.value.trim()){posCustomerId=null; document.getElementById('posCust').value='';}">
+      <input type="text" id="posQuickNameInput" placeholder="مثلاً: راشد بھائی" value="${esc(posQuickName||'')}" oninput="posQuickName=this.value; if(this.value.trim()){posCustomerId=null; document.getElementById('posCust').value=''; posCustRefreshBtn();}">
       ${posQuickName?'<div class="meta" style="margin-top:4px;color:var(--red);">⚠️ فوری نام صرف بل پر دکھے گا — ادھار کا حساب (خاتہ) صرف محفوظ شدہ کسٹمر پر بنتا ہے</div>':''}
     </div>
 
