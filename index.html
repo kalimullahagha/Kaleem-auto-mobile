@@ -272,7 +272,7 @@
       <button class="iconbtn" onclick="openSettings()">⚙️</button>
     </div>
     <div class="screenTitle" id="screenTitle">ڈیش بورڈ</div>
-    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-03-v12</div>
+    <div style="text-align:center;font-size:10.5px;color:rgba(255,255,255,.55);margin-top:2px;">اپڈیٹ ورژن: 2026-10-03-v13</div>
     <div id="cloudStatusLine" style="text-align:center;font-size:10.5px;margin-top:2px;"></div>
   </header>
 
@@ -537,7 +537,7 @@ function collectTombstones(trash){
     purchases:new Set(), cashEntries:new Set(), bankEntries:new Set(), collections:new Set(),
     amanatPersons:new Set(), amanatEntries:new Set(), suppliers:new Set() };
   (trash||[]).forEach(function(tr){
-    if(!tr) return; const d=tr.data;
+    if(!tr || tr.restored) return; const d=tr.data;
     if(!d) return;
     try{
       if(tr.type==='item' && d.id) t.items.add(d.id);
@@ -573,11 +573,16 @@ function mergeArraysById(localArr, remoteArr, exclude){
 }
 function mergeTrashArrays(localTrash, remoteTrash){
   const map=new Map();
-  (remoteTrash||[]).forEach(function(t){ if(t && t.id) map.set(t.id, t); });
-  (localTrash||[]).forEach(function(t){ if(t && t.id) map.set(t.id, t); });
-  let merged=Array.from(map.values()).sort(function(a,b){ return (b.deletedAt||0)-(a.deletedAt||0); });
-  if(merged.length>200) merged.length=200;
-  return merged;
+  function rank(t){ return t.restored?2:(t.purged?1:0); }
+  function add(t){ if(!t||!t.id) return; const o=map.get(t.id); if(!o || rank(t)>rank(o)) map.set(t.id,t); }
+  (remoteTrash||[]).forEach(add);
+  (localTrash||[]).forEach(add);
+  let all=Array.from(map.values()).sort(function(a,b){ return (b.deletedAt||0)-(a.deletedAt||0); });
+  let active=all.filter(function(t){ return !t.purged && !t.restored; });
+  let marks=all.filter(function(t){ return t.purged || t.restored; });
+  if(active.length>200){ active.slice(200).forEach(function(t){ marks.push(slimTrash(t,'purged')); }); active.length=200; }
+  if(marks.length>3000) marks.length=3000;
+  return active.concat(marks).sort(function(a,b){ return (b.deletedAt||0)-(a.deletedAt||0); });
 }
 function mergeDB(localDB, remoteDB){
   if(!remoteDB) return localDB;
@@ -2089,7 +2094,7 @@ function renderMore(main){
         <div class="list-item" onclick="moreView='banks';render()"><div class="name">🏦 بینک اکاؤنٹس</div><span>›</span></div>
         <div class="list-item" onclick="moreView='amanat';render()"><div class="name">🔒 امانت (رقم)</div><span>›</span></div>
         <div class="list-item" onclick="moreView='suppliers';render()"><div class="name">🚚 سپلائرز (ادھار خریداری)</div><span>›</span></div>
-        <div class="list-item" onclick="moreView='trash';render()"><div class="name">🗑️ ری سائیکل بن${DB.trash&&DB.trash.length?` (${DB.trash.length})`:''}</div><span>›</span></div>
+        <div class="list-item" onclick="moreView='trash';render()"><div class="name">🗑️ ری سائیکل بن${(()=>{const n=(DB.trash||[]).filter(t=>!t.purged&&!t.restored).length; return n?` (${n})`:'';})()}</div><span>›</span></div>
         <div class="list-item" onclick="moreView='settings';render()"><div class="name">⚙️ دکان کی سیٹنگز</div><span>›</span></div>
       </div>
     `;
@@ -2332,7 +2337,19 @@ async function deleteAmanatEntry(personId,entryId){
 function trashPut(type, label, data){
   DB.trash = DB.trash||[];
   DB.trash.unshift({ id:uid(), type, label, data, deletedAt:Date.now() });
-  if(DB.trash.length>200) DB.trash.length=200;
+  DB.trash = mergeTrashArrays(DB.trash, []);
+}
+/* a permanently-deleted / restored trash entry is kept as a tiny marker (ids only) so cloud sync cannot bring it back */
+function slimTrash(t, state){
+  const d=t.data||{}; const idOf=function(x){ return x&&x.id?{id:x.id}:null; };
+  const ids=function(a){ return (a||[]).map(idOf).filter(Boolean); };
+  let data;
+  if(t.type==='customer') data={customer:idOf(d.customer), sales:ids(d.sales), collections:ids(d.collections)};
+  else if(t.type==='amanatPerson') data={person:idOf(d.person), entries:ids(d.entries)};
+  else if(t.type==='bank') data={bank:idOf(d.bank), bankEntries:ids(d.bankEntries), sales:ids(d.sales), purchases:ids(d.purchases)};
+  else data=idOf(d)||{};
+  const r={ id:t.id, type:t.type, label:'', data:data, deletedAt:t.deletedAt||Date.now() };
+  r[state]=true; return r;
 }
 function trashTimeAgo(ts){
   const mins=Math.floor((Date.now()-ts)/60000);
@@ -2343,7 +2360,7 @@ function trashTimeAgo(ts){
   return Math.floor(hrs/24)+' دن پہلے';
 }
 function renderTrash(main){
-  const items = DB.trash||[];
+  const items = (DB.trash||[]).filter(t=>!t.purged && !t.restored);
   main.innerHTML = `
     <button class="btn btn-outline" style="margin-bottom:10px;" onclick="backToMoreMenu()">‹ واپس</button>
     <div class="card">
@@ -2361,12 +2378,12 @@ function renderTrash(main){
 }
 async function permanentDeleteTrash(trashId){
   if(!(await customConfirm('اسے ہمیشہ کے لیے حذف کرنا چاہتے ہیں؟ یہ واپس نہیں آئے گا۔'))) return;
-  DB.trash = (DB.trash||[]).filter(t=>t.id!==trashId);
+  DB.trash = (DB.trash||[]).map(t=>t.id===trashId ? slimTrash(t,'purged') : t);
   await saveDB(); renderTrash(document.getElementById('main')); toast('ہمیشہ کے لیے حذف ہو گیا');
 }
 async function restoreFromTrash(trashId){
   const t = (DB.trash||[]).find(x=>x.id===trashId);
-  if(!t) return;
+  if(!t || t.purged || t.restored) return;
   const d = t.data;
   if(t.type==='customer'){
     DB.customers.push(d.customer);
@@ -2397,7 +2414,7 @@ async function restoreFromTrash(trashId){
   } else if(t.type==='amanatEntry'){
     DB.amanatEntries.push(d);
   }
-  DB.trash = (DB.trash||[]).filter(x=>x.id!==trashId);
+  DB.trash = (DB.trash||[]).map(x=>x.id===trashId ? slimTrash(x,'restored') : x);
   await saveDB(); renderTrash(document.getElementById('main')); toast('بحال ہو گیا');
 }
 
